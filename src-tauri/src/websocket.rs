@@ -1,6 +1,6 @@
-use futures::sink::SinkExt;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 use tauri::Emitter as _;
 
@@ -16,77 +16,58 @@ pub struct BroadcastData {
     pub text: Option<String>,
 }
 
-pub async fn start_server(app_handle: tauri::AppHandle, host: String, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn start_server(
+    app_handle: tauri::AppHandle,
+    host: String,
+    port: u16,
+    broadcast_tx: broadcast::Sender<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", host, port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-
     println!("WebSocket server listening on ws://{}", addr);
-
-    // Emit event that server is ready
     app_handle.emit("ws:server_status", "connected").ok();
 
     loop {
         let (stream, client_addr) = listener.accept().await?;
         println!("New client connected from: {}", client_addr);
-
         let app_handle = app_handle.clone();
-
-        // Emit event that a new client connected
-        app_handle.emit("ws:client_connected", client_addr.to_string()).ok();
+        let mut rx = broadcast_tx.subscribe();
 
         tokio::spawn(async move {
-            use tokio_tungstenite::accept_async;
-
-            let ws_stream = match accept_async(stream).await {
+            let ws_stream = match tokio_tungstenite::accept_async(stream).await {
                 Ok(ws) => ws,
                 Err(e) => {
-                    eprintln!("WebSocket accept error: {}", e);
+                    eprintln!("WebSocket handshake error from {}: {:?}", client_addr, e);
                     return;
                 }
             };
 
             let (mut write, mut read) = ws_stream.split();
+            app_handle.emit("ws:client_connected", client_addr.to_string()).ok();
 
-            // Handle reading and sending
-            while let Some(result) = read.next().await {
-                let message = match result {
-                    Ok(msg) => msg,
-                    Err(e) => {
-                        eprintln!("WebSocket error: {}", e);
-                        break;
-                    }
-                };
-
-                // Only process text messages
-                if let Message::Text(text) = &message {
-                    println!("Received: {}", text);
-
-                    // Try to parse as EspMessage
-                    let parsed: Result<EspMessage, _> = serde_json::from_str(text);
-
-                    let broadcast_msg = match &parsed {
-                        Ok(msg) => {
-                            // Serialize first for the acknowledgment
-                            let data = BroadcastData {
-                                emotion: msg.emotion.clone(),
-                                text: msg.text.clone(),
-                            };
-                            let json_str = serde_json::to_string(&data).unwrap_or_default();
-                            // Forward emotion/text to frontend
-                            app_handle.emit("ws:message", data).ok();
-                            json_str
+            loop {
+                tokio::select! {
+                    // Outgoing: anything broadcast from the chat bridge gets pushed to this client
+                    Ok(msg) = rx.recv() => {
+                        if write.send(Message::Text(msg)).await.is_err() {
+                            break;
                         }
-                        Err(_) => {
-                            // Not a structured message, just forward raw
-                            text.clone()
-                        }
-                    };
-
-                    // Echo back acknowledgment
-                    let ack = format!(r#"{{"status":"received","data":"{}"}}"#, broadcast_msg.replace('"', "\\\""));
-                    if write.send(Message::Text(ack)).await.is_err() {
-                        break;
                     }
+                    // Incoming: messages the ESP32 sends up to the PC (optional, kept for future use)
+                    Some(result) = read.next() => {
+                        match result {
+                            Ok(Message::Text(text)) => {
+                                println!("Received from {}: {}", client_addr, text);
+                                if let Ok(parsed) = serde_json::from_str::<EspMessage>(&text) {
+                                    let data = BroadcastData { emotion: parsed.emotion, text: parsed.text };
+                                    app_handle.emit("ws:message", data).ok();
+                                }
+                            }
+                            Ok(Message::Close(_)) | Err(_) => break,
+                            _ => {}
+                        }
+                    }
+                    else => break,
                 }
             }
 
