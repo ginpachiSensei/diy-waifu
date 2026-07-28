@@ -1,4 +1,5 @@
 use sysinfo::System;
+use tauri::Emitter;
 
 const HEAVY_APPS: &[&str] = &["blender.exe", "unity.exe", "unityhub.exe"];
 

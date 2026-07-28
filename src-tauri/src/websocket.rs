@@ -1,8 +1,9 @@
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use tauri::Emitter as _;
+use tauri::Manager;
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
-use tauri::Emitter as _;
 
 #[derive(Debug, Deserialize)]
 pub struct EspMessage {
@@ -43,7 +44,9 @@ pub async fn start_server(
             };
 
             let (mut write, mut read) = ws_stream.split();
-            app_handle.emit("ws:client_connected", client_addr.to_string()).ok();
+            app_handle
+                .emit("ws:client_connected", client_addr.to_string())
+                .ok();
 
             loop {
                 tokio::select! {
@@ -59,12 +62,60 @@ pub async fn start_server(
                             Ok(Message::Text(text)) => {
                                 println!("Received from {}: {}", client_addr, text);
                                 if let Ok(parsed) = serde_json::from_str::<EspMessage>(&text) {
-                                    let data = BroadcastData { emotion: parsed.emotion, text: parsed.text };
+
+                                    // 1. Still emit to the frontend so your UI updates
+                                    let data = BroadcastData {
+                                        emotion: parsed.emotion.clone(),
+                                        text: parsed.text.clone()
+                                    };
                                     app_handle.emit("ws:message", data).ok();
+
+                                    // 2. NEW: Call Ollama directly from the Rust backend!
+                                    if let Some(user_text) = parsed.text {
+                                        let state = app_handle.state::<crate::AppState>();
+
+                                        // Check if companion is paused before answering
+                                        if !state.paused.load(std::sync::atomic::Ordering::Relaxed) {
+                                            let tx = broadcast_tx.clone();
+
+                                            // Spawn a background task so we don't freeze the WebSocket loop
+                                            tokio::spawn(async move {
+                                                println!("Sending to Ollama: {}", user_text);
+
+                                                match crate::ollama::chat(&user_text, crate::ollama::MODEL_NAME).await {
+                                                    Ok((reply_text, emotion)) => {
+                                                        println!("Got reply from Ollama: {}", reply_text);
+
+                                                        // Format the payload exactly how the client expects it
+                                                        let payload = serde_json::json!({
+                                                            "emotion": emotion,
+                                                            "text": reply_text
+                                                        });
+
+                                                        // This broadcast channel automatically routes back
+                                                        // to the outgoing WebSocket select! macro loop
+                                                        let _ = tx.send(payload.to_string());
+                                                    }
+                                                    Err(e) => eprintln!("❌ Ollama chat error: {}", e),
+                                                }
+                                            });
+                                        }
+                                    }
+                                } else {
+                                    eprintln!("Failed to parse JSON: {}", text);
                                 }
                             }
-                            Ok(Message::Close(_)) | Err(_) => break,
-                            _ => {}
+
+                            // NEW: Handle other non-text WebSocket messages (Binary, Ping, Pong, Close)
+                            Ok(other_msg) => {
+                                println!("Received non-text message: {:?}", other_msg);
+                            }
+
+                            // NEW: Handle WebSocket connection errors
+                            Err(e) => {
+                                eprintln!("WebSocket read error: {}", e);
+                                break; // Exit the loop because the connection is likely dead
+                            }
                         }
                     }
                     else => break,
@@ -72,7 +123,9 @@ pub async fn start_server(
             }
 
             println!("Client {} disconnected", client_addr);
-            app_handle.emit("ws:client_disconnected", client_addr.to_string()).ok();
+            app_handle
+                .emit("ws:client_disconnected", client_addr.to_string())
+                .ok();
         });
     }
 }
