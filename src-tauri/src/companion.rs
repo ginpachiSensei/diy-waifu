@@ -115,7 +115,7 @@ pub fn build_messages(
     out
 }
 
-fn broadcast(app: &tauri::AppHandle, payload: serde_json::Value) {
+pub fn broadcast(app: &tauri::AppHandle, payload: serde_json::Value) {
     // Err only means no body is connected right now
     let _ = app.state::<AppState>().broadcast_tx.send(payload.to_string());
 }
@@ -369,6 +369,10 @@ async fn generate_reply(app: &tauri::AppHandle, db: &Db, turn: Turn) -> Result<S
                     Ok(p) => add_reminder(app, db, &p, now),
                     Err(e) => format!("Couldn't set the reminder: {e}. Ask the user when."),
                 }
+            } else if settings.ask_before_lookup && !crate::ask::ask(app, tools::question(call)).await {
+                "The user said not to look this up. Don't guess the answer or make up facts: say you \
+                 didn't check, and help with what you already know."
+                    .to_string()
             } else {
                 let label = tools::label(call);
                 // The UI and bodies drop any text streamed before the lookup

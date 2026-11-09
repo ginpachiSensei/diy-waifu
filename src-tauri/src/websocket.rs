@@ -21,6 +21,9 @@ struct BodyMessage {
     kind: Option<String>,
     body: Option<String>,
     text: Option<String>,
+    /// For {"type":"answer"}: which question, and the answer
+    id: Option<u64>,
+    yes: Option<bool>,
 }
 
 pub async fn start_server(
@@ -114,6 +117,12 @@ pub async fn start_server(
                                 if let Some(b) = msg.body.filter(|b| !b.trim().is_empty()) {
                                     log::info!("{} is a {}", client_addr, b);
                                     body = b;
+                                }
+                                continue;
+                            }
+                            if msg.kind.as_deref() == Some("answer") {
+                                if let (Some(id), Some(yes)) = (msg.id, msg.yes) {
+                                    crate::ask::answer(&app_handle, id, yes);
                                 }
                                 continue;
                             }

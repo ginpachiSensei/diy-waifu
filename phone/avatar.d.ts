@@ -12,6 +12,8 @@ export interface CompanionMessage {
   state?: string;
   source?: string;
   label?: string;
+  /** "ask" / "ask_done": which question */
+  id?: number;
   sources?: { title: string; url: string }[];
 }
 

@@ -1,4 +1,5 @@
 mod activity;
+mod ask;
 mod companion;
 mod db;
 mod desktop;
@@ -420,6 +421,12 @@ async fn delete_voice_model(app: tauri::AppHandle, id: String) -> Result<(), Str
     voice::delete_model(&app, &id).await
 }
 
+/// Answers an "ask me first" question (see ask.rs)
+#[tauri::command]
+fn answer_ask(app: tauri::AppHandle, id: u64, yes: bool) -> bool {
+    ask::answer(&app, id, yes)
+}
+
 /// Pet mic button pressed
 #[tauri::command]
 fn voice_start(app: tauri::AppHandle) -> Result<(), String> {
@@ -526,6 +533,7 @@ pub fn run() {
         })
         .manage(desktop::PetState::default())
         .manage(voice::VoiceState::default())
+        .manage(ask::Asks::default())
         .on_window_event(|window, event| match event {
             // Closing a window only hides it; Quit is in the tray
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -578,6 +586,7 @@ pub fn run() {
             voice_status,
             download_voice_model,
             delete_voice_model,
+            answer_ask,
             voice_start,
             voice_stop
         ])

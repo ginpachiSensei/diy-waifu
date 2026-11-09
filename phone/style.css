@@ -128,3 +128,16 @@ body {
 /* Hide the bar in fullscreen until tapped, so it looks like a dedicated screen */
 body.kiosk #bar { display: none; }
 body.kiosk.show-bar #bar { display: flex; }
+
+/* "Ask me first" yes/no */
+#ask:not([hidden]) { display: flex; gap: 12px; margin-top: 14px; }
+#ask button {
+  flex: 1;
+  padding: 12px;
+  font-size: 1.1rem;
+  border: none;
+  border-radius: 12px;
+  color: inherit;
+  background: #333;
+}
+#ask #ask-yes { background: #c2185b; }

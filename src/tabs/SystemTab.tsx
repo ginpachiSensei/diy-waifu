@@ -116,6 +116,15 @@ export default function SystemTab({ ollamaStatus, pause, toggleManualPause, sett
           />
           Let the companion look things up online (web search, reading pages, weather)
         </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={settings?.askBeforeLookup ?? false}
+            disabled={!settings?.internetAccess}
+            onChange={(e) => saveSettings({ askBeforeLookup: e.currentTarget.checked })}
+          />
+          Ask me first each time (yes/no in the chat, on the pet and on the phone)
+        </label>
         <p className="hint">
           Tools only read; links to this PC or your home network are always refused. Works best with 3B+ models;
           qwen2.5:1.5b often ignores the tools.

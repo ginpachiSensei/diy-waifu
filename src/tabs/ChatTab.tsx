@@ -19,6 +19,7 @@ export default function ChatTab({ settings }: { settings: Settings | null }) {
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [question, setQuestion] = useState<{ id: number; text: string } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,6 +52,9 @@ export default function ChatTab({ settings }: { settings: Settings | null }) {
         setStreaming("");
       }),
       listen<string>("chat:error", (e) => setError(e.payload)),
+      // "Ask me first" mode
+      listen<{ id: number; text: string }>("chat:ask", (e) => setQuestion(e.payload)),
+      listen<number>("chat:ask_done", (e) => setQuestion((q) => (q?.id === e.payload ? null : q))),
     ];
     return () => unlisten.forEach((u) => u.then((f) => f()));
   }, []);
@@ -134,6 +138,21 @@ export default function ChatTab({ settings }: { settings: Settings | null }) {
           </div>
         )}
       </div>
+
+      {question && (
+        <div className="card row">
+          <span className="grow">{question.text}</span>
+          <button
+            className="primary"
+            onClick={() => invoke("answer_ask", { id: question.id, yes: true }).catch(console.error)}
+          >
+            Yes
+          </button>
+          <button onClick={() => invoke("answer_ask", { id: question.id, yes: false }).catch(console.error)}>
+            No
+          </button>
+        </div>
+      )}
 
       {error && <p className="error">{error}</p>}
 
