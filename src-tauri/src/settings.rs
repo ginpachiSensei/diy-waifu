@@ -47,6 +47,10 @@ pub struct Settings {
     pub share_titles: bool,
     pub activity_rules: Vec<ActivityRule>,
     pub privacy_rules: Vec<ActivityRule>,
+    /// Let the model search the web, read pages and check the weather
+    pub internet_access: bool,
+    /// Brave Search API key (empty: keyless DuckDuckGo Instant Answers)
+    pub brave_api_key: String,
 }
 
 impl Default for Settings {
@@ -68,6 +72,8 @@ impl Default for Settings {
             share_titles: false,
             activity_rules: default_rules(),
             privacy_rules: default_privacy_rules(),
+            internet_access: true,
+            brave_api_key: String::new(),
         }
     }
 }
@@ -98,6 +104,7 @@ impl Settings {
         self.companion_name = self.companion_name.trim().to_string();
         self.user_name = self.user_name.trim().to_string();
         self.personality = self.personality.trim().to_string();
+        self.brave_api_key = self.brave_api_key.trim().to_string();
         if self.model.is_empty() {
             return Err("Pick a model first".into());
         }

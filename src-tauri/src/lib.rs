@@ -7,6 +7,7 @@ mod ollama;
 mod pause;
 mod phone;
 mod settings;
+mod tools;
 mod websocket;
 
 use db::{Db, StoredMessage};
@@ -243,6 +244,14 @@ fn get_activity_totals(db: tauri::State<'_, Db>, since: i64) -> Result<Vec<(Stri
     db.category_totals_since(since)
 }
 
+/// Runs one search with the given Brave key (empty: DuckDuckGo Instant
+/// Answers) so the System tab can check a key before saving it.
+#[tauri::command]
+async fn test_search(brave_key: String) -> Result<String, String> {
+    let out = tools::search::search("weather", &brave_key).await?;
+    Ok(format!("{} works ({} results)", out.provider, out.results.len()))
+}
+
 /// GIF manifest plus where the GIFs are served, for the pet window.
 #[tauri::command]
 fn get_gif_manifest() -> serde_json::Value {
@@ -335,7 +344,8 @@ pub fn run() {
             open_panel,
             get_gif_manifest,
             get_activity,
-            get_activity_totals
+            get_activity_totals,
+            test_search
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

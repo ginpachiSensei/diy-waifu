@@ -261,7 +261,9 @@ Add new commands for these: `get_history`, `clear_history`, `get_settings`, `set
 
 ## Phase 9: Internet access
 
-The model decides when to look something up, using Ollama tool calling. `qwen2.5` supports it. 3B and up are reliable; 1.5B often isn't. Search uses DuckDuckGo with no API key. All tools are read-only.
+The model decides when to look something up, using Ollama tool calling. `qwen2.5` supports it. 3B and up are reliable; 1.5B calls tools but often renames their arguments. All tools are read-only.
+
+> **Changed while building:** DuckDuckGo's HTML results page answers automated clients with a bot challenge, and Google's Custom Search API is closed to new users (it shuts down in January 2027). Search now uses official APIs: the **Brave Search API** with a key from the user (free tier), or keyless **DuckDuckGo Instant Answers** (quick facts only).
 
 9.1 **M** **Tool-calling loop in the brain.**
 - `companion.rs` sends a `tools` list with `/api/chat`.
@@ -269,9 +271,9 @@ The model decides when to look something up, using Ollama tool calling. `qwen2.5
 - New `src-tauri/src/tools/` module with one file per tool, each with a schema, a function to run it, and a short status label.
 
 9.2 **M** **`web_search(query)`.**
-- `GET https://html.duckduckgo.com/html/?q=…`, parsed with the `scraper` crate, keeping the top 5 results (title, URL, snippet).
-- Results are cached for 10 min per query, and requests are spaced at least 2s apart to avoid rate limits.
-- A parser test runs against a saved results page in `tests/fixtures/`, so a DDG layout change shows up as a failing test, not a silent break.
+- The Brave Search API (`X-Subscription-Token`) gives the top 5 results when a key is set. Otherwise it uses `api.duckduckgo.com` Instant Answers (abstract, answer, definition, related topics).
+- Results are cached for 10 min per query, and requests are spaced at least 1.1s apart (Brave's free tier allows 1 request per second).
+- The System tab has a key field with a Test button (`test_search`).
 
 9.3 **M** **`fetch_page(url)`.**
 - Fetches a page and pulls out the readable text (`article`/`main`/`p` blocks, without scripts and navigation), capped at about 4000 characters.
@@ -316,6 +318,7 @@ The model decides when to look something up, using Ollama tool calling. `qwen2.5
 **Status:**
 - **M1** is done (steps 0.1–0.4, 1.1–1.5, 1.7). Step 1.6 (optional GPU runner) is still to do.
 - **M2** is done (2.1–2.6, 4.1–4.5). The pet is a WebSocket body. The state machine is shared through `phone/avatar.js`.
+- **M4** is done (9.1–9.4, 9.6–9.8). The 9.5 "ask me first" mode isn't built yet; there's only the on/off switch. The search source changed (see Phase 9).
 - **M3** is done for 3.1–3.7. `monitor.rs` stays as its own 5s heavy-app loop rather than being merged into `activity.rs`. 4.6 (art) is yours; 4.7 (ESP32 GIFs) waits for that art.
 
 ## Critical files

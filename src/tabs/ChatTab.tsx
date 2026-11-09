@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
 import { ChatMessage, Settings, errorText } from "../api";
 
@@ -13,6 +14,7 @@ const SOURCE_LABEL: Record<string, string> = {
 export default function ChatTab({ settings }: { settings: Settings | null }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState<string | null>(null);
+  const [lookup, setLookup] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -34,8 +36,19 @@ export default function ChatTab({ settings }: { settings: Settings | null }) {
         add(e.payload);
         if (e.payload.role === "user") setError(null);
       }),
-      listen<boolean>("chat:busy", (e) => setStreaming(e.payload ? "" : null)),
-      listen<string>("chat:token", (e) => setStreaming((s) => (s ?? "") + e.payload)),
+      listen<boolean>("chat:busy", (e) => {
+        setStreaming(e.payload ? "" : null);
+        setLookup(null);
+      }),
+      listen<string>("chat:token", (e) => {
+        setLookup(null);
+        setStreaming((s) => (s ?? "") + e.payload);
+      }),
+      // A lookup started: drop any text streamed before it
+      listen<string>("chat:tool", (e) => {
+        setLookup(e.payload);
+        setStreaming("");
+      }),
       listen<string>("chat:error", (e) => setError(e.payload)),
     ];
     return () => unlisten.forEach((u) => u.then((f) => f()));
@@ -91,12 +104,31 @@ export default function ChatTab({ settings }: { settings: Settings | null }) {
               {m.role === "assistant" && m.emotion && <span className="emotion"> · {m.emotion}</span>}
             </div>
             <div className="bubble-text">{m.text}</div>
+            {m.sources?.length > 0 && (
+              <div className="sources">
+                {m.sources.map((s) => (
+                  <a
+                    key={s.url}
+                    href={s.url}
+                    title={s.url}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      openUrl(s.url).catch(console.error);
+                    }}
+                  >
+                    {s.title || s.url}
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
         ))}
         {busy && (
           <div className="bubble assistant">
             <div className="bubble-meta">{name}</div>
-            <div className="bubble-text">{streaming || <span className="muted">thinking…</span>}</div>
+            <div className="bubble-text">
+              {streaming || <span className="muted">{lookup ? `🔎 ${lookup}…` : "thinking…"}</span>}
+            </div>
           </div>
         )}
       </div>

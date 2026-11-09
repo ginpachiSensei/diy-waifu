@@ -78,15 +78,27 @@ Shared state is `AppState { broadcast_tx, ollama_child, ollama_status, paused, p
 4. streams the reply with `ollama::chat_stream`,
 5. saves the reply and broadcasts it.
 
+**Internet tools** ([tools/](src-tauri/src/tools/)): with `settings.internetAccess` on, the brain sends Ollama a `tools` list. If the model returns `tool_calls`, the brain runs them, adds `role: "tool"` results, and asks again. After `MAX_TOOL_ROUNDS` (3) it has to answer. Models that report "does not support tools" are remembered and get plain chat.
+- `web_search`: the **Brave Search API** when `settings.braveApiKey` is set, otherwise DuckDuckGo's official **Instant Answer API** (quick facts only).
+  - **Don't scrape search engines' HTML pages.** DuckDuckGo and Google serve automated clients a bot challenge, and getting around it is off-limits.
+  - Google's Custom Search API is closed to new users and shuts down in January 2027.
+- `fetch_page`: readable text, capped at 4000 characters. Every hop goes through `guard::resolve_public`, the SSRF guard: it refuses localhost, private, link-local and CGNAT addresses after DNS lookup, and the request is pinned to the address it checked. Redirects are followed by hand.
+- `weather`: Open-Meteo.
+
+Tool output from the web is labelled untrusted. `ToolCall::arg` accepts renamed arguments, because small models write `city` for `place`. Replies keep their `sources` (a JSON column in `messages`).
+
+The system prompt also gets the local date and time from chrono, plus an internet on/off line.
+
 Past replies are sent back to the model with their `[emotion: x]` tag so it keeps using the format. `extract_emotion` also accepts a bare `[happy]`, and `visible_stream_text` holds back a possible trailing tag while streaming.
 
-**Storage** ([db.rs](src-tauri/src/db.rs)): SQLite (`rusqlite`, bundled) at `%APPDATA%\com.satyam.diy-waifu\companion.db`. It has `messages(id, ts, role, text, emotion, source)`, `settings(key, value)` and `activity_sessions(app, category, start_ts, end_ts)`. To change the schema, append to `MIGRATIONS` (tracked by `PRAGMA user_version`); never edit an entry that has shipped. [settings.rs](src-tauri/src/settings.rs) is one JSON blob under key `settings`, holding model (default `qwen2.5:3b`), companionName, userName, personality, replyLength, autoPause, heavyApps, petVisible, screenAwareness, shareTitles, activityRules and privacyRules. Every field has a serde default, so old saves still load. Logs go to `%LOCALAPPDATA%\com.satyam.diy-waifu\logs` through `tauri-plugin-log`; use `log::info!` and the like, not `println!`.
+**Storage** ([db.rs](src-tauri/src/db.rs)): SQLite (`rusqlite`, bundled) at `%APPDATA%\com.satyam.diy-waifu\companion.db`. It has `messages(id, ts, role, text, emotion, source, sources)`, `settings(key, value)` and `activity_sessions(app, category, start_ts, end_ts)`. To change the schema, append to `MIGRATIONS` (tracked by `PRAGMA user_version`); never edit an entry that has shipped. [settings.rs](src-tauri/src/settings.rs) is one JSON blob under key `settings`, holding model (default `qwen2.5:3b`), companionName, userName, personality, replyLength, autoPause, heavyApps, petVisible, screenAwareness, shareTitles, activityRules, privacyRules, internetAccess and braveApiKey. Every field has a serde default, so old saves still load. Logs go to `%LOCALAPPDATA%\com.satyam.diy-waifu\logs` through `tauri-plugin-log`; use `log::info!` and the like, not `println!`.
 
 **Wire protocol** (server → bodies; the broadcast channel goes to **every** client):
 - `{"type":"user","text","source"}`: someone said something.
 - `{"type":"thinking"}`
+- `{"type":"tool","name","label"}`: a lookup is running, e.g. "searching: …". Bodies drop any text streamed before it.
 - `{"type":"token","text"}`: a streamed piece of the reply.
-- `{"type":"reply","emotion","text"}`: the final reply. A message with no `type` also counts as a reply, for older clients.
+- `{"type":"reply","emotion","text","sources"?}`: the final reply. A message with no `type` also counts as a reply, for older clients.
 - `{"type":"state","state"}`: avatar state. `away` and `active` set presence. Anything else is the activity category: `coding|video|gaming|music|browsing|chatting|creative|other|private`, or `idle` for none.
 
 Emotions are `happy|sad|thinking|excited|neutral`. Bodies must ignore types they don't know. When paused or on an error, a `reply` is still sent so bodies stop waiting.
@@ -97,10 +109,11 @@ Emotions are `happy|sad|thinking|excited|neutral`. Bodies must ignore types they
 - Models: `get_ollama_status`, `list_models`, `pull_model`, `delete_model`.
 - Pause: `set_paused` (manual), `get_pause_state`.
 - Activity: `get_activity`, `get_activity_totals(since)`.
+- Internet: `test_search(braveKey)`.
 - Desktop: `get_desktop_state`, `set_pet_visible`, `set_pet_click_through`, `set_autostart`, `open_panel`, `get_gif_manifest`.
 - Bodies: `get_phone_url`.
 
-**Events** (`listen`): `chat:message` (a saved message), `chat:token`, `chat:busy`, `chat:error`, `settings:changed`, `ollama:status` (`starting|ready|failed`), `model:progress`, `ws:server_status`, `ws:client_connected`, `ws:client_disconnected`, `companion:paused` (`PauseState`), `pet:click_through`, `activity:changed` (`Activity`).
+**Events** (`listen`): `chat:message` (a saved message), `chat:token`, `chat:tool` (lookup label), `chat:busy`, `chat:error`, `settings:changed`, `ollama:status` (`starting|ready|failed`), `model:progress`, `ws:server_status`, `ws:client_connected`, `ws:client_disconnected`, `companion:paused` (`PauseState`), `pet:click_through`, `activity:changed` (`Activity`).
 
 A new command must be added to `generate_handler!` in `lib.rs`. A new plugin permission goes in [src-tauri/capabilities/default.json](src-tauri/capabilities/default.json).
 
@@ -118,7 +131,7 @@ A new command must be added to `generate_handler!` in `lib.rs`. A new plugin per
 
 `gifFor` maps a state to a file through [gifs/manifest.json](gifs/manifest.json), with fallbacks such as excited → happy → idle → default. **To add art**, drop the GIF in `gifs/` and point a state at it in the manifest. Nothing else changes, and a test checks that every file the manifest names exists. The ESP32 still uses its own compiled-in table.
 
-The roadmap is in [docs/ROADMAP.md](docs/ROADMAP.md). The milestones are: M1 conversation (done), M2 tray, autostart and desktop pet (done), M3 screen awareness (done, apart from the art in 4.6 and the ESP32 GIFs in 4.7), M4 internet access (DuckDuckGo search and page fetch through Ollama tool calls), M5 long-term memory and speaking first, M6 PC voice, M7 hardening.
+The roadmap is in [docs/ROADMAP.md](docs/ROADMAP.md). The milestones are: M1 conversation (done), M2 tray, autostart and desktop pet (done), M3 screen awareness (done, apart from the art in 4.6 and the ESP32 GIFs in 4.7), M4 internet access (done: Brave or DuckDuckGo Instant Answer search, page fetch and weather through Ollama tool calls), M5 long-term memory and speaking first, M6 PC voice, M7 hardening.
 
 ## Known gaps
 

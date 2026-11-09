@@ -2,6 +2,7 @@
 //! data folder (`companion.db`). Schema changes go at the end of `MIGRATIONS`;
 //! never edit one that has shipped.
 
+use crate::tools::Source;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::Path;
@@ -31,6 +32,9 @@ const MIGRATIONS: &[&str] = &["
         end_ts   INTEGER NOT NULL
     );
     CREATE INDEX activity_sessions_start ON activity_sessions(start_ts);
+", "
+    -- JSON array of {title, url} for replies that used the web
+    ALTER TABLE messages ADD COLUMN sources TEXT;
 "];
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -41,6 +45,8 @@ pub struct StoredMessage {
     pub text: String,
     pub emotion: Option<String>,
     pub source: String,
+    /// Web pages the reply was based on (empty for most messages)
+    pub sources: Vec<Source>,
 }
 
 pub struct Db {
@@ -89,12 +95,16 @@ impl Db {
         text: &str,
         emotion: Option<&str>,
         source: &str,
+        sources: &[Source],
     ) -> Result<StoredMessage, String> {
         let ts = now_millis();
+        let sources_json = (!sources.is_empty())
+            .then(|| serde_json::to_string(sources).ok())
+            .flatten();
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO messages (ts, role, text, emotion, source) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![ts, role, text, emotion, source],
+            "INSERT INTO messages (ts, role, text, emotion, source, sources) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![ts, role, text, emotion, source, sources_json],
         )
         .map_err(err)?;
         Ok(StoredMessage {
@@ -104,6 +114,7 @@ impl Db {
             text: text.to_string(),
             emotion: emotion.map(str::to_string),
             source: source.to_string(),
+            sources: sources.to_vec(),
         })
     }
 
@@ -112,7 +123,7 @@ impl Db {
         let conn = self.conn();
         let mut stmt = conn
             .prepare(
-                "SELECT id, ts, role, text, emotion, source FROM messages
+                "SELECT id, ts, role, text, emotion, source, sources FROM messages
                  ORDER BY id DESC LIMIT ?1",
             )
             .map_err(err)?;
@@ -125,6 +136,10 @@ impl Db {
                     text: r.get(3)?,
                     emotion: r.get(4)?,
                     source: r.get(5)?,
+                    sources: r
+                        .get::<_, Option<String>>(6)?
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_default(),
                 })
             })
             .map_err(err)?
@@ -227,11 +242,18 @@ mod tests {
     fn stores_and_returns_recent_messages_in_order() {
         let db = Db::open_in_memory().unwrap();
         for i in 0..5 {
-            db.add_message("user", &format!("m{i}"), None, "panel").unwrap();
+            db.add_message("user", &format!("m{i}"), None, "panel", &[]).unwrap();
         }
         let recent = db.recent_messages(3).unwrap();
         let texts: Vec<_> = recent.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(texts, ["m2", "m3", "m4"]);
+
+        let src = vec![Source {
+            title: "Rust".into(),
+            url: "https://rust-lang.org/".into(),
+        }];
+        db.add_message("assistant", "with sources", Some("happy"), "companion", &src).unwrap();
+        assert_eq!(db.recent_messages(1).unwrap()[0].sources, src);
 
         db.clear_messages().unwrap();
         assert!(db.recent_messages(10).unwrap().is_empty());

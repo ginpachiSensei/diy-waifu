@@ -11,11 +11,14 @@ export interface CompanionMessage {
   emotion?: string;
   state?: string;
   source?: string;
+  label?: string;
+  sources?: { title: string; url: string }[];
 }
 
 export interface Avatar {
   readonly state: string;
   thinking(): void;
+  searching(): void;
   token(): void;
   reply(emotion?: string): void;
   setState(state: string | null): void;

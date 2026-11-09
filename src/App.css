@@ -407,3 +407,35 @@ section textarea {
 .rule-actions button {
   padding: 2px 8px;
 }
+
+/* ---- Sources under replies ---- */
+
+.sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+.sources a {
+  color: var(--accent);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+label.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0 6px;
+  font-weight: 500;
+}
+.grow-input {
+  flex: 1;
+  min-width: 0;
+}

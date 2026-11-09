@@ -8,6 +8,12 @@ export interface ChatMessage {
   text: string;
   emotion: string | null;
   source: string; // panel | phone | esp32 | pet | companion | body
+  sources: Source[]; // web pages a reply was based on
+}
+
+export interface Source {
+  title: string;
+  url: string;
 }
 
 export type ReplyLength = "short" | "medium" | "long";
@@ -25,6 +31,8 @@ export interface Settings {
   shareTitles: boolean;
   activityRules: ActivityRule[];
   privacyRules: ActivityRule[];
+  internetAccess: boolean;
+  braveApiKey: string;
 }
 
 /** Empty fields match anything; app is an exact process name, title/path are substrings. */

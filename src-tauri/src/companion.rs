@@ -6,15 +6,46 @@
 //! Wire protocol sent to bodies (see CLAUDE.md):
 //!   {"type":"user","text","source"}   someone said something
 //!   {"type":"thinking"}               a reply is being generated
+//!   {"type":"tool","name","label"}    looking something up (e.g. "searching: ...")
 //!   {"type":"token","text"}           a streamed piece of the reply
-//!   {"type":"reply","emotion","text"} the final reply (no "type" = reply, for old clients)
+//!   {"type":"reply","emotion","text","sources"?} the final reply
+//!                                     (no "type" = reply, for old clients)
+//!
+//! With internet access on, the model can call tools (web_search, fetch_page,
+//! weather). Each round it either answers or asks for tools; results go back
+//! in and it's asked again, up to MAX_TOOL_ROUNDS times.
 
 use crate::db::{Db, StoredMessage};
 use crate::ollama::{self, ChatMessage};
 use crate::settings::Settings;
+use crate::tools::{self, Source};
 use crate::AppState;
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
+use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, Manager};
+
+/// After this many rounds of tool calls, the model must answer
+const MAX_TOOL_ROUNDS: usize = 3;
+const MAX_SOURCES: usize = 5;
+
+const INTERNET_ON: &str = "You can look things up online with your tools. Use them for news, current \
+events, scores, prices, the weather, or facts you aren't sure about, but not for normal chat. \
+After a lookup, answer in your own words in the usual short, casual way, and don't paste links.";
+const INTERNET_OFF: &str = "You have no internet access right now. If asked about current events or \
+anything you'd need to look up, say you can't check right now.";
+
+/// Models that told us they can't use tools, so we stop offering them
+fn no_tool_models() -> &'static Mutex<HashSet<String>> {
+    static S: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+fn date_line() -> String {
+    chrono::Local::now()
+        .format("Today is %A, %-d %B %Y, and the local time is %H:%M.")
+        .to_string()
+}
 
 /// At most this many past messages go into the prompt...
 const HISTORY_MAX_MESSAGES: u32 = 24;
@@ -90,11 +121,12 @@ fn broadcast(app: &tauri::AppHandle, payload: serde_json::Value) {
     let _ = app.state::<AppState>().broadcast_tx.send(payload.to_string());
 }
 
-fn broadcast_reply(app: &tauri::AppHandle, emotion: &str, text: &str) {
-    broadcast(
-        app,
-        serde_json::json!({ "type": "reply", "emotion": emotion, "text": text }),
-    );
+fn broadcast_reply(app: &tauri::AppHandle, emotion: &str, text: &str, sources: &[Source]) {
+    let mut msg = serde_json::json!({ "type": "reply", "emotion": emotion, "text": text });
+    if !sources.is_empty() {
+        msg["sources"] = serde_json::json!(sources);
+    }
+    broadcast(app, msg);
 }
 
 /// Handles one message from `source` ("panel", "phone", "esp32", ...) and
@@ -110,7 +142,7 @@ pub async fn handle_user_message(
     }
     let state = app.state::<AppState>();
     if state.paused.load(Ordering::Relaxed) {
-        broadcast_reply(app, "neutral", "I'm paused right now. Talk to you soon!");
+        broadcast_reply(app, "neutral", "I'm paused right now. Talk to you soon!", &[]);
         return Err("Companion is paused".into());
     }
 
@@ -118,7 +150,7 @@ pub async fn handle_user_message(
     let _turn = state.chat_lock.lock().await;
     let db = app.state::<Db>();
 
-    let user_msg = db.add_message("user", text, None, source)?;
+    let user_msg = db.add_message("user", text, None, source, &[])?;
     app.emit("chat:message", &user_msg).ok();
     app.emit("chat:busy", true).ok();
     broadcast(app, serde_json::json!({ "type": "user", "text": text, "source": source }));
@@ -130,13 +162,18 @@ pub async fn handle_user_message(
     match result {
         Ok(reply) => {
             app.emit("chat:message", &reply).ok();
-            broadcast_reply(app, reply.emotion.as_deref().unwrap_or("neutral"), &reply.text);
+            broadcast_reply(
+                app,
+                reply.emotion.as_deref().unwrap_or("neutral"),
+                &reply.text,
+                &reply.sources,
+            );
             Ok(reply)
         }
         Err(e) => {
             log::error!("Chat failed: {e}");
             app.emit("chat:error", &e).ok();
-            broadcast_reply(app, "sad", "Sorry, I couldn't think of a reply.");
+            broadcast_reply(app, "sad", "Sorry, I couldn't think of a reply.", &[]);
             Err(e)
         }
     }
@@ -146,27 +183,69 @@ async fn generate_reply(app: &tauri::AppHandle, db: &Db) -> Result<StoredMessage
     let settings = Settings::load(db);
     let history = db.recent_messages(HISTORY_MAX_MESSAGES)?;
     let activity = app.state::<AppState>().activity.lock().unwrap().clone();
-    let context: Vec<String> = crate::activity::prompt_context(&activity, &settings)
-        .into_iter()
-        .collect();
-    let messages = build_messages(&settings, &context, &history);
+    let mut context = vec![date_line()];
+    context.extend(crate::activity::prompt_context(&activity, &settings));
+    context.push(if settings.internet_access { INTERNET_ON } else { INTERNET_OFF }.to_string());
+    let mut messages = build_messages(&settings, &context, &history);
 
-    let raw = ollama::chat_stream(&settings.model, &messages, |delta| {
+    let model = settings.model.as_str();
+    let definitions = tools::definitions();
+    let tool_ctx = tools::ToolContext {
+        brave_key: settings.brave_api_key.clone(),
+    };
+    let mut use_tools =
+        settings.internet_access && !no_tool_models().lock().unwrap().contains(model);
+    let mut sources: Vec<Source> = Vec::new();
+    let on_delta = |delta: &str| {
         app.emit("chat:token", delta).ok();
         broadcast(app, serde_json::json!({ "type": "token", "text": delta }));
-    })
-    .await
-    .map_err(|e| {
-        if e.contains("not found") {
-            format!("The model {} isn't downloaded yet. Get it in the Model tab.", settings.model)
-        } else {
-            e
+    };
+
+    let mut round = 0;
+    let raw = loop {
+        // The last round gets no tools, so it has to answer
+        let offer = use_tools && round < MAX_TOOL_ROUNDS;
+        let out = match ollama::chat_stream(model, &messages, offer.then_some(&definitions), on_delta).await {
+            Err(e) if offer && ollama::is_no_tools_error(&e) => {
+                log::warn!("{model} can't use tools; answering without internet");
+                no_tool_models().lock().unwrap().insert(model.to_string());
+                use_tools = false;
+                continue;
+            }
+            Err(e) if e.contains("not found") => {
+                return Err(format!(
+                    "The model {model} isn't downloaded yet. Get it in the Model tab."
+                ))
+            }
+            other => other?,
+        };
+        if out.tool_calls.is_empty() {
+            break out.raw;
         }
-    })?;
+
+        messages.push(ChatMessage {
+            tool_calls: Some(out.tool_calls_raw),
+            ..ChatMessage::new("assistant", out.raw)
+        });
+        for call in &out.tool_calls {
+            let label = tools::label(call);
+            // The UI and bodies drop any text streamed before the lookup
+            app.emit("chat:tool", &label).ok();
+            broadcast(
+                app,
+                serde_json::json!({ "type": "tool", "name": call.name, "label": label }),
+            );
+            let result = tools::run(call, &tool_ctx).await;
+            sources.extend(result.sources);
+            messages.push(ChatMessage::tool_result(&call.name, result.content));
+        }
+        round += 1;
+    };
 
     let (reply_text, emotion) = ollama::extract_emotion(&raw);
     log::info!("Reply ({emotion}): {reply_text}");
-    db.add_message("assistant", &reply_text, Some(&emotion), "companion")
+    let sources = tools::dedupe_sources(sources, MAX_SOURCES);
+    db.add_message("assistant", &reply_text, Some(&emotion), "companion", &sources)
 }
 
 #[cfg(test)]
@@ -182,6 +261,7 @@ mod tests {
             text: text.into(),
             emotion: emotion.map(Into::into),
             source: "panel".into(),
+            sources: vec![],
         }
     }
 

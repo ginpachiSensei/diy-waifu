@@ -4,6 +4,8 @@ use std::sync::OnceLock;
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
+use crate::tools::ToolCall;
+
 const OLLAMA_URL: &str = "http://localhost:11434";
 
 /// Context window we ask Ollama for. History is trimmed to fit well inside it.
@@ -234,6 +236,12 @@ pub async fn unload_model(model: &str) -> Result<(), String> {
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// On an assistant message that asked for tools, sent back as-is
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<serde_json::Value>>,
+    /// On a `role: "tool"` message: which tool this is the result of
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
 }
 
 impl ChatMessage {
@@ -241,6 +249,15 @@ impl ChatMessage {
         Self {
             role: role.to_string(),
             content: content.into(),
+            tool_calls: None,
+            tool_name: None,
+        }
+    }
+
+    pub fn tool_result(name: &str, content: impl Into<String>) -> Self {
+        Self {
+            tool_name: Some(name.to_string()),
+            ..Self::new("tool", content)
         }
     }
 }
@@ -259,37 +276,67 @@ struct ChatChunk {
 struct ChunkMessage {
     #[serde(default)]
     content: String,
+    #[serde(default)]
+    tool_calls: Vec<serde_json::Value>,
+}
+
+pub struct ChatOutput {
+    /// The reply text, emotion tag included
+    pub raw: String,
+    /// Tools the model wants run; if not empty, `raw` is usually empty
+    pub tool_calls: Vec<ToolCall>,
+    /// The same calls in Ollama's format, to send back with the results
+    pub tool_calls_raw: Vec<serde_json::Value>,
+}
+
+/// `{"function": {"name", "arguments"}}`; arguments may arrive as a JSON string.
+fn parse_tool_call(v: &serde_json::Value) -> Option<ToolCall> {
+    let f = v.get("function")?;
+    let name = f.get("name")?.as_str()?.to_string();
+    let arguments = match f.get("arguments") {
+        Some(serde_json::Value::String(s)) => serde_json::from_str(s).unwrap_or_default(),
+        Some(a) => a.clone(),
+        None => serde_json::Value::Null,
+    };
+    Some(ToolCall { name, arguments })
 }
 
 /// Streams a chat reply. `on_delta` gets each new piece of the reply as it
 /// arrives, with any trailing emotion tag held back (see `visible_stream_text`).
-/// Returns the full raw reply, tag included.
+/// With `tools`, the model may answer with tool calls instead of text.
 pub async fn chat_stream(
     model: &str,
     messages: &[ChatMessage],
+    tools: Option<&serde_json::Value>,
     mut on_delta: impl FnMut(&str),
-) -> Result<String, String> {
+) -> Result<ChatOutput, String> {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": true,
+        "keep_alive": KEEP_ALIVE,
+        "options": { "num_ctx": NUM_CTX },
+    });
+    if let Some(t) = tools {
+        body["tools"] = t.clone();
+    }
     let resp = client()
         .post(format!("{OLLAMA_URL}/api/chat"))
-        .json(&serde_json::json!({
-            "model": model,
-            "messages": messages,
-            "stream": true,
-            "keep_alive": KEEP_ALIVE,
-            "options": { "num_ctx": NUM_CTX },
-        }))
+        .json(&body)
         .send()
         .await
         .map_err(|e| e.to_string())?;
     let resp = check(resp).await?;
 
     let mut raw = String::new();
+    let mut tool_calls_raw = Vec::new();
     let mut sent = 0;
     for_each_json_line::<ChatChunk>(resp, |chunk| {
         if let Some(e) = chunk.error {
             return Err(e);
         }
         if let Some(m) = chunk.message {
+            tool_calls_raw.extend(m.tool_calls);
             raw.push_str(&m.content);
             let visible = visible_stream_text(&raw);
             if visible.len() > sent {
@@ -301,10 +348,20 @@ pub async fn chat_stream(
     })
     .await?;
 
-    if raw.trim().is_empty() {
+    let tool_calls: Vec<ToolCall> = tool_calls_raw.iter().filter_map(parse_tool_call).collect();
+    if raw.trim().is_empty() && tool_calls.is_empty() {
         return Err("The model sent an empty reply".into());
     }
-    Ok(raw)
+    Ok(ChatOutput {
+        raw,
+        tool_calls,
+        tool_calls_raw,
+    })
+}
+
+/// Ollama's error for models without tool support
+pub fn is_no_tools_error(e: &str) -> bool {
+    e.contains("does not support tools")
 }
 
 /// The part of a partly streamed reply that's safe to show. Text from the last
@@ -368,12 +425,30 @@ mod tests {
             ChatMessage::new("user", "Say hi!"),
         ];
         let mut deltas = String::new();
-        let raw = chat_stream(crate::settings::DEFAULT_MODEL, &messages, |d| deltas.push_str(d))
+        let raw = chat_stream(crate::settings::DEFAULT_MODEL, &messages, None, |d| deltas.push_str(d))
             .await
-            .expect("chat failed");
+            .expect("chat failed")
+            .raw;
         println!("raw: {raw:?}\nstreamed: {deltas:?}");
         let (text, _) = extract_emotion(&raw);
         assert_eq!(deltas.trim(), text.trim());
+    }
+
+    #[test]
+    fn parses_tool_calls_in_both_argument_formats() {
+        let obj = serde_json::json!({"function": {"name": "web_search", "arguments": {"query": "x"}}});
+        let s = serde_json::json!({"function": {"name": "weather", "arguments": "{\"place\":\"Delhi\"}"}});
+        assert_eq!(parse_tool_call(&obj).unwrap().arguments["query"], "x");
+        assert_eq!(parse_tool_call(&s).unwrap().arguments["place"], "Delhi");
+        assert!(parse_tool_call(&serde_json::json!({"nope": 1})).is_none());
+    }
+
+    #[test]
+    fn tool_messages_serialize_like_ollama_expects() {
+        let m = serde_json::to_value(ChatMessage::tool_result("weather", "sunny")).unwrap();
+        assert_eq!(m, serde_json::json!({"role": "tool", "content": "sunny", "tool_name": "weather"}));
+        let plain = serde_json::to_value(ChatMessage::new("user", "hi")).unwrap();
+        assert_eq!(plain, serde_json::json!({"role": "user", "content": "hi"}));
     }
 
     #[test]

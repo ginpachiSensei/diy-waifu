@@ -69,6 +69,15 @@ import { createAvatar, gifFor } from "./avatar.js";
     armReplyTimeout();
   }
 
+  function showLookup(label) {
+    streaming = false; // text streamed before the lookup is dropped
+    emotionEl.textContent = "searching";
+    textEl.textContent = `🔎 ${label}…`;
+    textEl.classList.add("thinking");
+    avatar.searching();
+    armReplyTimeout();
+  }
+
   function armReplyTimeout() {
     clearTimeout(replyTimer);
     replyTimer = setTimeout(() => {
@@ -121,6 +130,9 @@ import { createAvatar, gifFor } from "./avatar.js";
       switch (msg.type || "reply") {
         case "user": // someone (here or on another body) said something
           showThinking(text);
+          break;
+        case "tool": // looking something up, e.g. "searching: weather in Delhi"
+          showLookup(msg.label || "looking it up");
           break;
         case "token": // a streamed piece of the reply
           appendToken(text);

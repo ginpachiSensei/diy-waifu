@@ -5,7 +5,7 @@
 // Priority, highest first:
 //   1. the reply's emotion, for REPLY_HOLD_MS after a reply
 //   2. "talking" while a reply streams in
-//   3. "thinking" while waiting for the first token
+//   3. "searching" while a web lookup runs, else "thinking" while waiting for the first token
 //   4. "sleeping" when the user is away
 //   5. the current activity (e.g. "coding"), once screen awareness exists
 //   6. "idle"
@@ -21,6 +21,7 @@ const FALLBACK = {
   sad: "idle",
   neutral: "idle",
   thinking: "idle",
+  searching: "thinking",
   talking: "idle",
   sleeping: "idle",
 };
@@ -38,6 +39,7 @@ export function gifFor(manifest, state) {
 export function createAvatar(onChange) {
   const st = {
     thinking: false,
+    searching: false,
     talking: false,
     reply: null,
     replyUntil: 0,
@@ -50,6 +52,7 @@ export function createAvatar(onChange) {
   function compute() {
     if (st.reply && Date.now() < st.replyUntil) return st.reply;
     if (st.talking) return "talking";
+    if (st.searching) return "searching";
     if (st.thinking) return "thinking";
     if (st.away) return "sleeping";
     if (st.activity) return st.activity;
@@ -69,16 +72,21 @@ export function createAvatar(onChange) {
       return current ?? compute();
     },
     thinking() {
-      Object.assign(st, { thinking: true, talking: false, reply: null });
+      Object.assign(st, { thinking: true, searching: false, talking: false, reply: null });
+      update();
+    },
+    searching() {
+      Object.assign(st, { thinking: true, searching: true, talking: false, reply: null });
       update();
     },
     token() {
-      Object.assign(st, { thinking: false, talking: true, reply: null });
+      Object.assign(st, { thinking: false, searching: false, talking: true, reply: null });
       update();
     },
     reply(emotion) {
       Object.assign(st, {
         thinking: false,
+        searching: false,
         talking: false,
         reply: emotion || "neutral",
         replyUntil: Date.now() + REPLY_HOLD_MS,
@@ -100,6 +108,9 @@ export function createAvatar(onChange) {
         case "user":
         case "thinking":
           avatar.thinking();
+          break;
+        case "tool":
+          avatar.searching();
           break;
         case "token":
           if (!st.talking) avatar.token();

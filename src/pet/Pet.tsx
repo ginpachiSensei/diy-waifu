@@ -12,7 +12,7 @@ const RECONNECT_MS = 3000;
 // How long a finished reply stays up: at least 6s, longer for long replies
 const bubbleHoldMs = (text: string) => Math.max(6000, text.length * 70);
 
-type Bubble = { kind: "thinking" | "talking" | "reply"; text: string } | null;
+type Bubble = { kind: "thinking" | "searching" | "talking" | "reply"; text: string } | null;
 
 export default function Pet() {
   const [gifs, setGifs] = useState<{ base: string; manifest: GifManifest } | null>(null);
@@ -43,6 +43,9 @@ export default function Pet() {
       if (type === "user" || type === "thinking") {
         window.clearTimeout(hideTimer.current);
         setBubble({ kind: "thinking", text: "" });
+      } else if (type === "tool") {
+        window.clearTimeout(hideTimer.current);
+        setBubble({ kind: "searching", text: `🔎 ${msg.label ?? "looking it up"}…` });
       } else if (type === "token") {
         window.clearTimeout(hideTimer.current);
         setBubble((b) => ({ kind: "talking", text: (b?.kind === "talking" ? b.text : "") + (msg.text ?? "") }));

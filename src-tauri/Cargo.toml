@@ -27,13 +27,16 @@ tokio-tungstenite = "0.24"
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.13.4", features = ["json", "stream"] }
+reqwest = { version = "0.13.4", features = ["json", "stream", "form", "query"] }
 sysinfo = "0.32"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tauri-plugin-log = "2"
 log = "0.4"
 tauri-plugin-single-instance = "2"
 include_dir = "0.7"
+scraper = "0.22"
+url = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
