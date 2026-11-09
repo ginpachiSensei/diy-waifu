@@ -5,6 +5,7 @@ mod desktop;
 mod monitor;
 mod ollama;
 mod memory;
+mod pairing;
 mod pause;
 mod proactive;
 mod reminders;
@@ -442,11 +443,38 @@ fn get_gif_manifest() -> serde_json::Value {
     })
 }
 
-/// URL to open on a phone on the same Wi-Fi to use it as the companion's body.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Pairing {
+    code: String,
+    /// This PC on the local network, if it has an address there
+    lan_ip: Option<String>,
+    /// Page to open on a phone, with the code in it
+    phone_url: Option<String>,
+    /// QR code of `phone_url`
+    qr_svg: Option<String>,
+}
+
+/// The pairing code and the phone link, for the Bodies tab.
 #[tauri::command]
-fn get_phone_url() -> Result<String, String> {
-    let ip = phone::lan_ip().ok_or("Couldn't find this PC's network address")?;
-    Ok(format!("http://{}:{}/", ip, phone::PHONE_PORT))
+fn get_pairing(pairing: tauri::State<'_, pairing::Pairing>) -> Pairing {
+    let code = pairing.current();
+    let lan_ip = phone::lan_ip().map(|ip| ip.to_string());
+    let phone_url = lan_ip
+        .as_ref()
+        .map(|ip| format!("http://{}:{}/?token={}", ip, phone::PHONE_PORT, code));
+    let qr_svg = phone_url.as_deref().and_then(|u| pairing::qr_svg(u).ok());
+    Pairing { code, lan_ip, phone_url, qr_svg }
+}
+
+/// Makes a new pairing code. Bodies on other devices are disconnected and need the new one.
+#[tauri::command]
+fn new_pairing_code(
+    pairing: tauri::State<'_, pairing::Pairing>,
+    db: tauri::State<'_, Db>,
+) -> Result<Pairing, String> {
+    pairing.regenerate(&db)?;
+    Ok(get_pairing(pairing))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -524,7 +552,8 @@ pub fn run() {
             delete_model,
             set_paused,
             get_pause_state,
-            get_phone_url,
+            get_pairing,
+            new_pairing_code,
             get_desktop_state,
             set_pet_visible,
             set_pet_click_through,
@@ -560,6 +589,13 @@ pub fn run() {
             let db_path = data_dir.join("companion.db");
             log::info!("Database: {}", db_path.display());
             app.manage(Db::open(&db_path)?);
+            app.manage(pairing::Pairing::load(&app.state::<Db>()));
+            // Windows are `create: false` in tauri.conf.json and made here, after
+            // the state above is managed. Otherwise their pages can call commands
+            // before the DB exists ("state not managed for field `db`").
+            for cfg in app.config().app.windows.clone() {
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &cfg)?.build()?;
+            }
             let settings = Settings::load(&app.state::<Db>());
 
             desktop::place_pet(&app_handle);

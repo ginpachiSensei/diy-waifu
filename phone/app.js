@@ -6,6 +6,8 @@
 //
 // The Tauri app serves this page on port 8081. The WebSocket is on 8080 of the
 // same host. Add ?ws=ws://host:port to the URL to point it somewhere else.
+// ?token=CODE is the pairing code from the app's Bodies tab (the QR code there
+// includes it). It's remembered, so the plain URL works afterwards.
 
 import { createAvatar, gifFor } from "./avatar.js";
 
@@ -41,6 +43,22 @@ import { createAvatar, gifFor } from "./avatar.js";
   // ---- Small storage helpers (storage can be blocked) ----
   const load = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
   const save = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
+
+  // ---- Pairing code ----
+  if (params.get("token")) {
+    save("pairToken", params.get("token").trim());
+    // Keep the code out of the address bar (and screenshots of it)
+    params.delete("token");
+    const rest = params.toString();
+    history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : ""));
+  }
+  function wsUrl() {
+    const token = load("pairToken", "");
+    if (!token) return WS_URL;
+    const u = new URL(WS_URL);
+    u.searchParams.set("token", token);
+    return u.toString();
+  }
 
   // ---- Display ----
   function setGif(state) {
@@ -109,14 +127,16 @@ import { createAvatar, gifFor } from "./avatar.js";
   function connect() {
     showStatus("connecting", "connecting");
     try {
-      ws = new WebSocket(WS_URL);
+      ws = new WebSocket(wsUrl());
     } catch (e) {
       console.error(e);
       setTimeout(connect, RECONNECT_MS);
       return;
     }
 
+    let opened = false;
     ws.onopen = () => {
+      opened = true;
       showStatus("linked", "online");
       ws.send(JSON.stringify({ type: "hello", body: "phone" }));
     };
@@ -153,7 +173,12 @@ import { createAvatar, gifFor } from "./avatar.js";
     };
 
     ws.onclose = () => {
-      showStatus("offline", "offline");
+      // Refused during the handshake: usually a missing or old pairing code
+      if (!opened && load("pairToken", "") === "" && !["localhost", "127.0.0.1"].includes(location.hostname)) {
+        showStatus("scan the QR code in the app", "offline");
+      } else {
+        showStatus(opened ? "offline" : "offline (pairing code changed?)", "offline");
+      }
       setTimeout(connect, RECONNECT_MS);
     };
     ws.onerror = () => ws.close();

@@ -173,3 +173,10 @@ export function formatBytes(n: number): string {
 export function errorText(e: unknown): string {
   return typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
 }
+
+export interface Pairing {
+  code: string;
+  lanIp: string | null;
+  phoneUrl: string | null;
+  qrSvg: string | null;
+}
