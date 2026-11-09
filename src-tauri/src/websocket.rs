@@ -2,11 +2,17 @@
 //! Everything on the broadcast channel goes to every client. Incoming messages:
 //!   {"type":"hello","body":"phone"}  says what kind of body this is
 //!   {"text":"..."}                   something the user said; gets a reply
+//!
+//! Clients that aren't on this PC need the pairing code: ws://host:8080/?token=CODE
+//! (see pairing.rs).
 
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tauri::{Emitter as _, Manager as _};
 use tokio::sync::broadcast::{self, error::RecvError};
+use crate::pairing::Verdict;
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Debug, Deserialize)]
@@ -30,18 +36,39 @@ pub async fn start_server(
 
     loop {
         let (stream, client_addr) = listener.accept().await?;
-        log::info!("New client connected from: {}", client_addr);
         let app_handle = app_handle.clone();
         let mut rx = broadcast_tx.subscribe();
+        let mut token_rx = app_handle.state::<crate::pairing::Pairing>().0.subscribe();
+        let local = crate::pairing::check(client_addr.ip(), None, "") == crate::pairing::Verdict::Ok;
 
         tokio::spawn(async move {
-            let ws_stream = match tokio_tungstenite::accept_async(stream).await {
+            let token = token_rx.borrow_and_update().clone();
+            // The error type is fixed by tungstenite
+            #[allow(clippy::result_large_err)]
+            let check = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+                let given = crate::pairing::token_from_query(req.uri().query());
+                match crate::pairing::check(client_addr.ip(), given.as_deref(), &token) {
+                    Verdict::Ok => Ok(resp),
+                    v => {
+                        log::warn!("Refused body from {client_addr}: {v:?}");
+                        let (code, text) = match v {
+                            Verdict::NotLocal => (403, "Only devices on the local network can connect"),
+                            _ => (401, "Wrong or missing pairing code (add ?token=CODE)"),
+                        };
+                        let mut r = ErrorResponse::new(Some(text.to_string()));
+                        *r.status_mut() = StatusCode::from_u16(code).unwrap();
+                        Err(r)
+                    }
+                }
+            };
+            let ws_stream = match tokio_tungstenite::accept_hdr_async(stream, check).await {
                 Ok(ws) => ws,
                 Err(e) => {
-                    log::warn!("WebSocket handshake error from {}: {:?}", client_addr, e);
+                    log::warn!("WebSocket handshake with {} failed: {}", client_addr, e);
                     return;
                 }
             };
+            log::info!("New client connected from: {}", client_addr);
 
             let (mut write, mut read) = ws_stream.split();
             app_handle
@@ -59,6 +86,12 @@ pub async fn start_server(
 
             loop {
                 tokio::select! {
+                    // A new pairing code was made: drop bodies that used the old one
+                    _ = token_rx.changed(), if !local => {
+                        log::info!("Disconnecting {} after the pairing code changed", client_addr);
+                        write.send(Message::Close(None)).await.ok();
+                        break;
+                    }
                     outgoing = rx.recv() => match outgoing {
                         Ok(msg) => {
                             if write.send(Message::Text(msg)).await.is_err() {

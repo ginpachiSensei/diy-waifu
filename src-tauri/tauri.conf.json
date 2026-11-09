@@ -18,7 +18,8 @@
         "height": 640,
         "minWidth": 480,
         "minHeight": 400,
-        "visible": false
+        "visible": false,
+        "create": false
       },
       {
         "label": "pet",
@@ -33,7 +34,8 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visible": false,
-        "focus": false
+        "focus": false,
+        "create": false
       }
     ],
     "security": {
