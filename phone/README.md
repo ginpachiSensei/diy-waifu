@@ -33,8 +33,7 @@ Chrome only enables speech recognition and the Wake Lock API on `https://` or `l
 ## Adding GIFs
 
 1. Put the file in `gifs/` at the repo root.
-2. Add a row to `FILES` in `src-tauri/src/phone.rs`.
-3. Point an emotion at it in `EMOTION_GIFS` in `app.js`.
+2. Point a state or emotion at it in `gifs/manifest.json`. The desktop pet uses the same manifest.
 
 Unlike the ESP32, the phone doesn't need resizing or header conversion.
 

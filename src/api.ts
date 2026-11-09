@@ -18,6 +18,9 @@ export interface Settings {
   userName: string;
   personality: string;
   replyLength: ReplyLength;
+  autoPause: boolean;
+  heavyApps: string[];
+  petVisible: boolean;
 }
 
 export interface InstalledModel {
@@ -33,6 +36,18 @@ export interface PullProgress {
 }
 
 export type OllamaStatus = "starting" | "ready" | "failed";
+
+export interface PauseState {
+  paused: boolean;
+  manual: boolean;
+  autoReason: string | null; // e.g. "blender.exe is running"
+}
+
+export interface DesktopState {
+  petVisible: boolean;
+  clickThrough: boolean;
+  autostart: boolean;
+}
 
 export const RECOMMENDED_MODELS: { name: string; size: string; note: string }[] = [
   { name: "qwen2.5:1.5b", size: "~1 GB", note: "Fastest. Forgets the thread in longer chats." },

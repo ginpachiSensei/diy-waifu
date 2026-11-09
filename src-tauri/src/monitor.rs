@@ -1,31 +1,51 @@
+//! Every 5s, auto-pauses the companion while a heavy app (from settings) is
+//! running, so the model's RAM and CPU go to that app instead.
+//! Phase 3 replaces this with the foreground-app tracker in activity.rs.
+
+use crate::db::Db;
+use crate::settings::Settings;
 use sysinfo::System;
-use tauri::Emitter;
+use tauri::Manager;
 
-const HEAVY_APPS: &[&str] = &["blender.exe", "unity.exe", "unityhub.exe"];
+/// The first heavy app in `running` (process names), if any.
+fn find_heavy(running: impl IntoIterator<Item = String>, heavy: &[String]) -> Option<&str> {
+    running.into_iter().find_map(|name| {
+        let name = name.to_lowercase();
+        heavy.iter().find(|h| **h == name).map(String::as_str)
+    })
+}
 
-pub async fn run_monitor_loop(app_handle: tauri::AppHandle) {
-    let mut sys = System::new_all();
-    let mut currently_paused = false;
+pub async fn run_monitor_loop(app: tauri::AppHandle) {
+    let mut sys = System::new();
 
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        let settings = Settings::load(&app.state::<Db>());
 
-        let heavy_app_running = sys.processes().values().any(|p| {
-            let name = p.name().to_string_lossy().to_lowercase();
-            HEAVY_APPS.iter().any(|h| name == *h)
-        });
+        let reason = if settings.auto_pause && !settings.heavy_apps.is_empty() {
+            sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+            let names = sys
+                .processes()
+                .values()
+                .map(|p| p.name().to_string_lossy().into_owned());
+            find_heavy(names, &settings.heavy_apps).map(|app| format!("{app} is running"))
+        } else {
+            None
+        };
+        // No-op unless it changed
+        crate::pause::set_auto(&app, reason);
+    }
+}
 
-        if heavy_app_running && !currently_paused {
-            println!("Heavy app detected — pausing companion");
-            currently_paused = true;
-            app_handle.emit("companion:paused", true).ok();
-            // TODO: actually unload the Ollama model here via
-            // POST /api/generate with "keep_alive": 0, or skip chat calls entirely
-        } else if !heavy_app_running && currently_paused {
-            println!("Heavy app closed — resuming companion");
-            currently_paused = false;
-            app_handle.emit("companion:paused", false).ok();
-        }
+#[cfg(test)]
+mod tests {
+    use super::find_heavy;
+
+    #[test]
+    fn matches_process_names_case_insensitively() {
+        let heavy = vec!["blender.exe".to_string()];
+        let running = ["explorer.exe", "Blender.exe"].map(String::from);
+        assert_eq!(find_heavy(running, &heavy), Some("blender.exe"));
+        assert_eq!(find_heavy(["code.exe".to_string()], &heavy), None);
     }
 }

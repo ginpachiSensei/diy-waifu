@@ -270,7 +270,9 @@ Add new commands for these: `get_history`, `clear_history`, `get_settings`, `set
 | M5 "talks" | 7 | PC voice in and out |
 | M6 "polished" | 8 | Real ESP32, security, cross-platform, CI |
 
-**Status:** M1 is done (steps 0.1–0.4, 1.1–1.5, 1.7). 1.6 (optional GPU runner) is still to do.
+**Status:**
+- **M1** is done (steps 0.1–0.4, 1.1–1.5, 1.7). Step 1.6 (optional GPU runner) is still to do.
+- **M2** is done (2.1–2.6, 4.1–4.5). The pet is a WebSocket body. The state machine is shared through `phone/avatar.js`.
 
 ## Critical files
 

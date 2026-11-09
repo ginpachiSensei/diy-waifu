@@ -1,25 +1,25 @@
 // Phone "body" for the companion app. Does the same job as esp32/src/main.cpp:
-// connects to the app's WebSocket and shows each reply next to the emotion's GIF
-// (it streams in as "token" messages, then a final "reply" with the emotion). Also lets you type or speak a message, and can
-// read replies aloud.
+// connects to the app's WebSocket and shows each reply as it streams in ("token"
+// messages, then a final "reply" with the emotion). The GIF comes from the
+// shared avatar state machine (avatar.js) and gifs/manifest.json. Also lets you
+// type or speak a message, and can read replies aloud.
 //
 // The Tauri app serves this page on port 8081. The WebSocket is on 8080 of the
 // same host. Add ?ws=ws://host:port to the URL to point it somewhere else.
 
-(() => {
-  "use strict";
+import { createAvatar, gifFor } from "./avatar.js";
 
-  // ---- Emotion -> GIF table (mirrors EMOTION_GIFS in the ESP32 firmware) ----
-  // Every emotion uses the wave GIF for now. Add a file to gifs/ and to the
-  // FILES table in src-tauri/src/phone.rs, then point a row here at it.
-  const EMOTION_GIFS = {
-    neutral: "gifs/mai-san-wave.gif",
-    happy: "gifs/mai-san-wave.gif",
-    excited: "gifs/mai-san-wave.gif",
-    sad: "gifs/mai-san-wave.gif",
-    thinking: "gifs/mai-san-wave.gif",
-  };
-  const gifForEmotion = (e) => EMOTION_GIFS[e] || EMOTION_GIFS.neutral;
+(() => {
+  // ---- Avatar: which GIF to show. Add art by editing gifs/manifest.json ----
+  let manifest = { default: "mai-san-wave.gif", states: {} };
+  const avatar = createAvatar((state) => setGif(state));
+  fetch("gifs/manifest.json")
+    .then((r) => r.json())
+    .then((m) => {
+      manifest = m;
+      setGif(avatar.state);
+    })
+    .catch((e) => console.warn("couldn't load gif manifest", e));
 
   const RECONNECT_MS = 3000;
   const REPLY_TIMEOUT_MS = 90000; // give up waiting if the app goes quiet mid-reply
@@ -43,8 +43,10 @@
   const save = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
 
   // ---- Display ----
-  function setGif(emotion) {
-    const src = gifForEmotion(emotion);
+  function setGif(state) {
+    const name = gifFor(manifest, state);
+    if (!name) return;
+    const src = `gifs/${name}`;
     // Only swap when it changes, otherwise the animation restarts
     if (gifEl.getAttribute("src") !== src) gifEl.setAttribute("src", src);
   }
@@ -54,7 +56,7 @@
     emotionEl.textContent = emotion;
     textEl.textContent = text;
     textEl.classList.remove("thinking");
-    setGif(emotion);
+    avatar.reply(emotion);
   }
 
   let replyTimer = null;
@@ -63,7 +65,7 @@
     emotionEl.textContent = "thinking";
     textEl.textContent = `“${userText}”`;
     textEl.classList.add("thinking");
-    setGif("thinking");
+    avatar.thinking();
     armReplyTimeout();
   }
 
@@ -83,6 +85,7 @@
       textEl.classList.remove("thinking");
     }
     textEl.textContent += token;
+    avatar.token();
     armReplyTimeout();
   }
 
@@ -129,7 +132,10 @@
           speak(text);
           break;
         }
-        default: // "thinking", "state", and anything newer: nothing to show yet
+        case "state": // e.g. "away" or an activity like "coding"
+          avatar.setState(msg.state);
+          break;
+        default: // "thinking" (already shown on "user") and anything newer
           break;
       }
     };

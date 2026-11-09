@@ -2,22 +2,54 @@
 //! an Android phone on the same network can open it in a browser. The page then
 //! connects to the WebSocket server like the ESP32 does.
 //!
-//! Files are compiled into the binary, so there's nothing to bundle and the
-//! only routes that exist are the ones listed in `FILES`.
+//! Files are compiled into the binary, so there's nothing to bundle. Routes are
+//! the pages listed in `FILES`, plus everything in the repo's `gifs/` folder
+//! under `/gifs/` (including `manifest.json`, which maps avatar states to GIFs
+//! for the phone and the desktop pet).
 
+use include_dir::{include_dir, Dir};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 pub const PHONE_PORT: u16 = 8081;
 
-/// (path, content type, bytes). Add new GIFs here and in `phone/app.js`.
+static GIFS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../gifs");
+
+/// (path, content type, bytes) for the phone page itself.
 const FILES: &[(&str, &str, &[u8])] = &[
     ("/", "text/html; charset=utf-8", include_bytes!("../../phone/index.html")),
     ("/index.html", "text/html; charset=utf-8", include_bytes!("../../phone/index.html")),
     ("/style.css", "text/css; charset=utf-8", include_bytes!("../../phone/style.css")),
     ("/app.js", "text/javascript; charset=utf-8", include_bytes!("../../phone/app.js")),
-    ("/gifs/mai-san-wave.gif", "image/gif", include_bytes!("../../gifs/mai-san-wave.gif")),
+    ("/avatar.js", "text/javascript; charset=utf-8", include_bytes!("../../phone/avatar.js")),
 ];
+
+/// The GIF manifest, for the desktop pet.
+pub fn gif_manifest() -> &'static str {
+    GIFS.get_file("manifest.json")
+        .and_then(|f| f.contents_utf8())
+        .unwrap_or("{}")
+}
+
+fn content_type(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("") {
+        "gif" => "image/gif",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+fn lookup(path: &str) -> Option<(&'static str, &'static [u8])> {
+    if let Some((_, ct, bytes)) = FILES.iter().find(|(p, _, _)| *p == path) {
+        return Some((ct, bytes));
+    }
+    // include_dir only holds files under gifs/, and ".." never matches one
+    let name = path.strip_prefix("/gifs/")?;
+    let file = GIFS.get_file(name)?;
+    Some((content_type(name), file.contents()))
+}
 
 pub async fn start_server(host: String, port: u16) -> std::io::Result<()> {
     let addr = format!("{}:{}", host, port);
@@ -58,14 +90,14 @@ async fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     let (status, content_type, body): (&str, &str, &[u8]) = if method != "GET" && method != "HEAD" {
         ("405 Method Not Allowed", "text/plain", b"Method not allowed")
     } else {
-        match FILES.iter().find(|(p, _, _)| *p == path) {
-            Some((_, ct, bytes)) => ("200 OK", *ct, *bytes),
+        match lookup(path) {
+            Some((ct, bytes)) => ("200 OK", ct, bytes),
             None => ("404 Not Found", "text/plain", b"Not found"),
         }
     };
 
     let header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(header.as_bytes()).await?;
@@ -92,6 +124,13 @@ mod tests {
     fn serves_every_listed_file() {
         assert!(FILES.iter().all(|(p, _, b)| p.starts_with('/') && !b.is_empty()));
         assert!(FILES.iter().any(|(p, _, _)| *p == "/"));
+        // Every GIF the manifest names must exist
+        let manifest: serde_json::Value = serde_json::from_str(gif_manifest()).unwrap();
+        let mut names: Vec<&str> = vec![manifest["default"].as_str().unwrap()];
+        names.extend(manifest["states"].as_object().unwrap().values().filter_map(|v| v.as_str()));
+        for n in names {
+            assert!(GIFS.get_file(n).is_some(), "manifest names missing gif {n}");
+        }
     }
 
     async fn get(port: u16, path: &str) -> String {
@@ -114,6 +153,9 @@ mod tests {
         assert!(index.starts_with("HTTP/1.1 200 OK"));
         assert!(index.contains("<title>Companion</title>"));
         assert!(get(port, "/gifs/mai-san-wave.gif").await.contains("image/gif"));
+        assert!(get(port, "/gifs/manifest.json").await.contains("application/json"));
+        assert!(get(port, "/avatar.js").await.starts_with("HTTP/1.1 200 OK"));
+        assert!(get(port, "/gifs/../../Cargo.toml").await.starts_with("HTTP/1.1 404"));
         assert!(get(port, "/../Cargo.toml").await.starts_with("HTTP/1.1 404"));
     }
 }

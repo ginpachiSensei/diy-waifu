@@ -12,9 +12,28 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "diy-waifu",
-        "width": 800,
-        "height": 600
+        "width": 820,
+        "height": 640,
+        "minWidth": 480,
+        "minHeight": 400,
+        "visible": false
+      },
+      {
+        "label": "pet",
+        "title": "Companion",
+        "url": "pet.html",
+        "width": 260,
+        "height": 360,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false
       }
     ],
     "security": {
@@ -24,7 +43,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/ollama"],
+    "externalBin": [
+      "binaries/ollama"
+    ],
     "resources": {
       "binaries/lib/ollama/": "lib/ollama/"
     },

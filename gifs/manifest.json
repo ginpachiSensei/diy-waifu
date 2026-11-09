@@ -1,0 +1,13 @@
+{
+  "default": "mai-san-wave.gif",
+  "states": {
+    "idle": "mai-san-wave.gif",
+    "talking": "mai-san-wave.gif",
+    "thinking": "mai-san-wave.gif",
+    "sleeping": "mai-san-wave.gif",
+    "neutral": "mai-san-wave.gif",
+    "happy": "mai-san-wave.gif",
+    "excited": "mai-san-wave.gif",
+    "sad": "mai-san-wave.gif"
+  }
+}

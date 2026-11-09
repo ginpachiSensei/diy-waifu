@@ -35,6 +35,11 @@ pub struct Settings {
     pub user_name: String,
     pub personality: String,
     pub reply_length: ReplyLength,
+    /// Pause automatically while one of `heavy_apps` is running
+    pub auto_pause: bool,
+    /// Process names, matched case-insensitively (e.g. "blender.exe")
+    pub heavy_apps: Vec<String>,
+    pub pet_visible: bool,
 }
 
 impl Default for Settings {
@@ -47,6 +52,11 @@ impl Default for Settings {
                           user and like hearing about their day."
                 .to_string(),
             reply_length: ReplyLength::Medium,
+            auto_pause: true,
+            heavy_apps: ["blender.exe", "unity.exe", "unityhub.exe"]
+                .map(String::from)
+                .to_vec(),
+            pet_visible: true,
         }
     }
 }
@@ -80,6 +90,14 @@ impl Settings {
         if self.model.is_empty() {
             return Err("Pick a model first".into());
         }
+        self.heavy_apps = self
+            .heavy_apps
+            .iter()
+            .map(|a| a.trim().to_lowercase())
+            .filter(|a| !a.is_empty())
+            .collect();
+        self.heavy_apps.sort();
+        self.heavy_apps.dedup();
         if self.companion_name.is_empty() {
             self.companion_name = Self::default().companion_name;
         }

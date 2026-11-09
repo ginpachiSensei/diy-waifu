@@ -8,6 +8,16 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(() => ({
   plugins: [react()],
 
+  // Two pages: the control panel and the floating pet window
+  build: {
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        pet: "pet.html",
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

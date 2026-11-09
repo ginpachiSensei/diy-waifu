@@ -68,6 +68,17 @@ pub async fn wait_for_ollama_ready(max_attempts: u32) -> bool {
     false
 }
 
+/// Quick "is Ollama answering" check for the watchdog.
+pub async fn is_healthy() -> bool {
+    client()
+        .get(format!("{OLLAMA_URL}/api/tags"))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers for Ollama's streaming (newline-delimited JSON) responses
 // ---------------------------------------------------------------------------
