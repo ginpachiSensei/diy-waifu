@@ -39,6 +39,8 @@ import { createAvatar, gifFor } from "./avatar.js";
   const micBtn = $("mic");
   const speakBtn = $("speak");
   const fsBtn = $("fullscreen");
+  const askEl = $("ask");
+  let askId = null;
 
   // ---- Small storage helpers (storage can be blocked) ----
   const load = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
@@ -154,6 +156,19 @@ import { createAvatar, gifFor } from "./avatar.js";
         case "tool": // looking something up, e.g. "searching: weather in Delhi"
           showLookup(msg.label || "looking it up");
           break;
+        case "ask": // "ask me first" mode: yes/no before a lookup
+          askId = msg.id;
+          emotionEl.textContent = "may I?";
+          textEl.textContent = text;
+          askEl.hidden = false;
+          armReplyTimeout();
+          break;
+        case "ask_done":
+          if (msg.id === askId) {
+            askId = null;
+            askEl.hidden = true;
+          }
+          break;
         case "token": // a streamed piece of the reply
           appendToken(text);
           break;
@@ -183,6 +198,14 @@ import { createAvatar, gifFor } from "./avatar.js";
     };
     ws.onerror = () => ws.close();
   }
+
+  function answer(yes) {
+    if (askId === null || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "answer", id: askId, yes }));
+    askEl.hidden = true;
+  }
+  $("ask-yes").addEventListener("click", () => answer(true));
+  $("ask-no").addEventListener("click", () => answer(false));
 
   function send(text) {
     text = text.trim();

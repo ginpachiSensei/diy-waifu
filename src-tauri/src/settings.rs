@@ -51,6 +51,8 @@ pub struct Settings {
     pub internet_access: bool,
     /// Brave Search API key (empty: keyless DuckDuckGo Instant Answers)
     pub brave_api_key: String,
+    /// Ask yes/no before each internet lookup (see ask.rs)
+    pub ask_before_lookup: bool,
     /// Learn facts about the user from chat in the background
     pub memory_learning: bool,
     /// Speak first: greetings, welcome back, break nudges, check-ins
@@ -97,6 +99,7 @@ impl Default for Settings {
             privacy_rules: default_privacy_rules(),
             internet_access: true,
             brave_api_key: String::new(),
+            ask_before_lookup: false,
             memory_learning: true,
             proactive: true,
             proactive_gap_minutes: 45,

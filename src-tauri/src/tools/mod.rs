@@ -135,6 +135,16 @@ pub fn label(call: &ToolCall) -> String {
     }
 }
 
+/// Yes/no question for "ask me first" mode
+pub fn question(call: &ToolCall) -> String {
+    match call.name.as_str() {
+        "web_search" => format!("Search the web for '{}'?", call.arg("query")),
+        "fetch_page" => format!("Open {}?", call.arg("url")),
+        "weather" => format!("Check the weather in {}?", call.arg("place")),
+        other => format!("Use {other}?"),
+    }
+}
+
 /// Text from the internet gets this header, since a page could contain
 /// instructions aimed at the model. The tools only read, so the worst case is
 /// a wrong answer, but say it anyway.

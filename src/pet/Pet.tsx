@@ -15,7 +15,7 @@ const RECONNECT_MS = 3000;
 // How long a finished reply stays up: at least 6s, longer for long replies
 const bubbleHoldMs = (text: string) => Math.max(6000, text.length * 70);
 
-type Bubble = { kind: "thinking" | "searching" | "talking" | "reply"; text: string } | null;
+type Bubble = { kind: "thinking" | "searching" | "talking" | "reply" | "ask"; text: string; id?: number } | null;
 
 export default function Pet() {
   const [gifs, setGifs] = useState<{ base: string; manifest: GifManifest } | null>(null);
@@ -68,6 +68,12 @@ export default function Pet() {
       } else if (type === "tool") {
         window.clearTimeout(hideTimer.current);
         setBubble({ kind: "searching", text: `🔎 ${msg.label ?? "looking it up"}…` });
+      } else if (type === "ask") {
+        // "Ask me first" mode: yes/no before a lookup
+        window.clearTimeout(hideTimer.current);
+        setBubble({ kind: "ask", text: msg.text ?? "", id: msg.id });
+      } else if (type === "ask_done") {
+        setBubble((b) => (b?.kind === "ask" && b.id === msg.id ? { kind: "thinking", text: "" } : b));
       } else if (type === "token") {
         window.clearTimeout(hideTimer.current);
         setBubble((b) => ({ kind: "talking", text: (b?.kind === "talking" ? b.text : "") + (msg.text ?? "") }));
@@ -131,6 +137,12 @@ export default function Pet() {
     setChatOpen(false);
   }
 
+  function answer(id: number | undefined, yes: boolean) {
+    if (id === undefined) return;
+    invoke("answer_ask", { id, yes }).catch(console.error);
+    setBubble({ kind: "thinking", text: "" });
+  }
+
   const gifName = gifs ? gifFor(gifs.manifest, state) : null;
   // `retry` only changes after a load error (the page server may start after this window)
   const gifSrc = gifs && gifName ? `${gifs.base}${gifName}${retry ? `?r=${retry}` : ""}` : null;
@@ -138,8 +150,20 @@ export default function Pet() {
   return (
     <div className="pet">
       {bubble && (
-        <div className={`bubble ${bubble.kind}`} ref={bubbleRef} onClick={() => setBubble(null)}>
-          {bubble.kind === "thinking" ? (
+        <div
+          className={`bubble ${bubble.kind}`}
+          ref={bubbleRef}
+          onClick={() => bubble.kind !== "ask" && setBubble(null)}
+        >
+          {bubble.kind === "ask" ? (
+            <>
+              {bubble.text}
+              <span className="ask-buttons">
+                <button onClick={() => answer(bubble.id, true)}>Yes</button>
+                <button onClick={() => answer(bubble.id, false)}>No</button>
+              </span>
+            </>
+          ) : bubble.kind === "thinking" ? (
             <span className="dots">
               <i />
               <i />

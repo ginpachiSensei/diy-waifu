@@ -33,6 +33,7 @@ export interface Settings {
   privacyRules: ActivityRule[];
   internetAccess: boolean;
   braveApiKey: string;
+  askBeforeLookup: boolean;
   memoryLearning: boolean;
   proactive: boolean;
   proactiveGapMinutes: number;

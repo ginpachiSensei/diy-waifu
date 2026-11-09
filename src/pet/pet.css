@@ -45,6 +45,24 @@ body,
 
 /* ---- Speech bubble ---- */
 
+.ask-buttons {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.ask-buttons button {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 4px 0;
+  font: inherit;
+  cursor: pointer;
+  background: #ffd6e7;
+}
+.ask-buttons button:last-child {
+  background: #eee;
+}
+
 .bubble {
   position: relative;
   max-width: 100%;
