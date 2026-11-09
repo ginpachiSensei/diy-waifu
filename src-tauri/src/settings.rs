@@ -51,6 +51,17 @@ pub struct Settings {
     pub internet_access: bool,
     /// Brave Search API key (empty: keyless DuckDuckGo Instant Answers)
     pub brave_api_key: String,
+    /// Learn facts about the user from chat in the background
+    pub memory_learning: bool,
+    /// Speak first: greetings, welcome back, break nudges, check-ins
+    pub proactive: bool,
+    /// Minimum minutes between unprompted lines
+    pub proactive_gap_minutes: u32,
+    /// Suggest a break after this long coding or creating
+    pub break_after_minutes: u32,
+    /// "HH:MM"; no unprompted lines (except reminders) between these
+    pub quiet_start: String,
+    pub quiet_end: String,
 }
 
 impl Default for Settings {
@@ -74,6 +85,12 @@ impl Default for Settings {
             privacy_rules: default_privacy_rules(),
             internet_access: true,
             brave_api_key: String::new(),
+            memory_learning: true,
+            proactive: true,
+            proactive_gap_minutes: 45,
+            break_after_minutes: 120,
+            quiet_start: "23:00".into(),
+            quiet_end: "08:00".into(),
         }
     }
 }
@@ -105,6 +122,13 @@ impl Settings {
         self.user_name = self.user_name.trim().to_string();
         self.personality = self.personality.trim().to_string();
         self.brave_api_key = self.brave_api_key.trim().to_string();
+        self.proactive_gap_minutes = self.proactive_gap_minutes.clamp(5, 24 * 60);
+        self.break_after_minutes = self.break_after_minutes.clamp(15, 12 * 60);
+        for t in [&self.quiet_start, &self.quiet_end] {
+            if chrono::NaiveTime::parse_from_str(t.trim(), "%H:%M").is_err() {
+                return Err(format!("Quiet hours need times like 23:00, not \"{t}\""));
+            }
+        }
         if self.model.is_empty() {
             return Err("Pick a model first".into());
         }

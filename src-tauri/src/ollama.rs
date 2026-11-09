@@ -359,6 +359,48 @@ pub async fn chat_stream(
     })
 }
 
+/// One non-streamed reply, for background jobs (fact extraction, summaries).
+/// With `json`, Ollama constrains the output to valid JSON.
+pub async fn chat_once(model: &str, messages: &[ChatMessage], json: bool) -> Result<String, String> {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": false,
+        "keep_alive": KEEP_ALIVE,
+        "options": { "num_ctx": NUM_CTX, "temperature": 0.2 },
+    });
+    if json {
+        body["format"] = "json".into();
+    }
+    let resp = client()
+        .post(format!("{OLLAMA_URL}/api/chat"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let v: serde_json::Value = check(resp).await?.json().await.map_err(|e| e.to_string())?;
+    Ok(v["message"]["content"].as_str().unwrap_or_default().to_string())
+}
+
+/// Embeddings for `inputs`, one vector each, in order.
+pub async fn embed(model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    #[derive(Deserialize)]
+    struct EmbedResponse {
+        embeddings: Vec<Vec<f32>>,
+    }
+    let resp = client()
+        .post(format!("{OLLAMA_URL}/api/embed"))
+        .json(&serde_json::json!({ "model": model, "input": inputs, "keep_alive": KEEP_ALIVE }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let r: EmbedResponse = check(resp).await?.json().await.map_err(|e| e.to_string())?;
+    if r.embeddings.len() != inputs.len() {
+        return Err("Ollama returned the wrong number of embeddings".into());
+    }
+    Ok(r.embeddings)
+}
+
 /// Ollama's error for models without tool support
 pub fn is_no_tools_error(e: &str) -> bool {
     e.contains("does not support tools")

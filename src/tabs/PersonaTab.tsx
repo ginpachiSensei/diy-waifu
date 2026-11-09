@@ -72,6 +72,53 @@ export default function PersonaTab({ settings, onSaved }: Props) {
           <option value="long">Long (a short paragraph)</option>
         </select>
       </label>
+      <fieldset className="group">
+        <legend>Speaking first</legend>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={draft.proactive}
+            onChange={(e) => set("proactive", e.currentTarget.checked)}
+          />
+          Say hi, welcome me back, suggest breaks, and check in after long silences
+        </label>
+        <div className="row">
+          <label className="inline">
+            At most once every
+            <input
+              type="number"
+              min={5}
+              max={1440}
+              value={draft.proactiveGapMinutes}
+              onChange={(e) => set("proactiveGapMinutes", Number(e.currentTarget.value))}
+            />
+            minutes
+          </label>
+          <label className="inline">
+            Break nudge after
+            <input
+              type="number"
+              min={15}
+              max={720}
+              value={draft.breakAfterMinutes}
+              onChange={(e) => set("breakAfterMinutes", Number(e.currentTarget.value))}
+            />
+            minutes of coding or creating
+          </label>
+        </div>
+        <div className="row">
+          <label className="inline">
+            Quiet from
+            <input type="time" value={draft.quietStart} onChange={(e) => set("quietStart", e.currentTarget.value)} />
+            to
+            <input type="time" value={draft.quietEnd} onChange={(e) => set("quietEnd", e.currentTarget.value)} />
+          </label>
+        </div>
+        <span className="hint">
+          It stays quiet while you're gaming, watching something, away, or already chatting. Reminders you ask for
+          always come through.
+        </span>
+      </fieldset>
       <div className="row">
         <button type="submit" className="primary" disabled={!dirty}>
           Save

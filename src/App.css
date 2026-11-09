@@ -439,3 +439,41 @@ label.field {
   flex: 1;
   min-width: 0;
 }
+
+/* ---- Memory / Persona extras ---- */
+
+.button-like {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.button-like:hover {
+  border-color: var(--accent);
+}
+
+fieldset.group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+fieldset.group legend {
+  font-weight: 600;
+  padding: 0 4px;
+}
+.form label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+}
+label.inline input[type="number"] {
+  width: 72px;
+}

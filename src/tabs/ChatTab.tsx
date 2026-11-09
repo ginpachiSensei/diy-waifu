@@ -101,6 +101,7 @@ export default function ChatTab({ settings }: { settings: Settings | null }) {
             <div className="bubble-meta">
               {m.role === "user" ? "You" : name}
               {m.role === "user" && SOURCE_LABEL[m.source] && <span> · {SOURCE_LABEL[m.source]}</span>}
+              {m.role === "assistant" && m.source === "proactive" && <span> · on its own</span>}
               {m.role === "assistant" && m.emotion && <span className="emotion"> · {m.emotion}</span>}
             </div>
             <div className="bubble-text">{m.text}</div>

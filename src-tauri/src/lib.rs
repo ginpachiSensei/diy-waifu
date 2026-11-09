@@ -4,7 +4,10 @@ mod db;
 mod desktop;
 mod monitor;
 mod ollama;
+mod memory;
 mod pause;
+mod proactive;
+mod reminders;
 mod phone;
 mod settings;
 mod tools;
@@ -252,6 +255,135 @@ async fn test_search(brave_key: String) -> Result<String, String> {
     Ok(format!("{} works ({} results)", out.provider, out.results.len()))
 }
 
+// ---- Memory ----
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryStatus {
+    embed_model: &'static str,
+    embed_ready: bool,
+    facts: i64,
+    summaries: i64,
+    messages: i64,
+    embedded_messages: i64,
+}
+
+#[tauri::command]
+async fn memory_status(db: tauri::State<'_, Db>) -> Result<MemoryStatus, String> {
+    Ok(MemoryStatus {
+        embed_model: memory::EMBED_MODEL,
+        embed_ready: memory::embed_ready().await,
+        facts: db.count("facts")?,
+        summaries: db.count("summaries")?,
+        messages: db.count("messages")?,
+        embedded_messages: db.count("message_embeddings")?,
+    })
+}
+
+#[tauri::command]
+fn list_facts(db: tauri::State<'_, Db>) -> Result<Vec<db::Fact>, String> {
+    db.list_facts()
+}
+
+#[tauri::command]
+async fn add_fact(app: tauri::AppHandle, db: tauri::State<'_, Db>, text: String) -> Result<db::Fact, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("The memory is empty".into());
+    }
+    let emb = memory::embed_document(text).await;
+    let f = db.add_fact(text, "user", emb.as_deref())?;
+    app.emit("memory:changed", ()).ok();
+    Ok(f)
+}
+
+#[tauri::command]
+async fn update_fact(app: tauri::AppHandle, db: tauri::State<'_, Db>, id: i64, text: String) -> Result<(), String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("The memory is empty".into());
+    }
+    let emb = memory::embed_document(text).await;
+    db.update_fact(id, text, emb.as_deref())?;
+    app.emit("memory:changed", ()).ok();
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_fact(app: tauri::AppHandle, db: tauri::State<'_, Db>, id: i64) -> Result<(), String> {
+    db.delete_fact(id)?;
+    app.emit("memory:changed", ()).ok();
+    Ok(())
+}
+
+#[tauri::command]
+fn list_summaries(db: tauri::State<'_, Db>) -> Result<Vec<db::Summary>, String> {
+    db.list_summaries(100)
+}
+
+#[tauri::command]
+fn delete_summary(app: tauri::AppHandle, db: tauri::State<'_, Db>, id: i64) -> Result<(), String> {
+    db.delete_summary(id)?;
+    app.emit("memory:changed", ()).ok();
+    Ok(())
+}
+
+#[tauri::command]
+fn list_reminders(db: tauri::State<'_, Db>) -> Result<Vec<db::Reminder>, String> {
+    db.pending_reminders()
+}
+
+#[tauri::command]
+fn delete_reminder(app: tauri::AppHandle, db: tauri::State<'_, Db>, id: i64) -> Result<(), String> {
+    db.delete_reminder(id)?;
+    app.emit("memory:changed", ()).ok();
+    Ok(())
+}
+
+/// Facts, summaries and message embeddings. Chat history stays.
+#[tauri::command]
+fn clear_memory(app: tauri::AppHandle, db: tauri::State<'_, Db>) -> Result<(), String> {
+    db.clear_memory()?;
+    app.emit("memory:changed", ()).ok();
+    Ok(())
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MemoryExport {
+    version: u32,
+    facts: Vec<db::Fact>,
+    summaries: Vec<db::Summary>,
+}
+
+#[tauri::command]
+fn export_memory(db: tauri::State<'_, Db>) -> Result<String, String> {
+    let export = MemoryExport {
+        version: 1,
+        facts: db.list_facts()?,
+        summaries: db.list_summaries(10_000)?,
+    };
+    serde_json::to_string_pretty(&export).map_err(|e| e.to_string())
+}
+
+/// Adds facts from an export (skipping ones already known). Returns how many were added.
+#[tauri::command]
+async fn import_memory(app: tauri::AppHandle, db: tauri::State<'_, Db>, json: String) -> Result<usize, String> {
+    let data: MemoryExport =
+        serde_json::from_str(&json).map_err(|e| format!("That isn't a memory export: {e}"))?;
+    let known: Vec<String> = db.list_facts()?.into_iter().map(|f| f.text.to_lowercase()).collect();
+    let mut added = 0;
+    for f in data.facts {
+        if f.text.trim().is_empty() || known.contains(&f.text.to_lowercase()) {
+            continue;
+        }
+        let emb = memory::embed_document(&f.text).await;
+        db.add_fact(&f.text, &f.origin, emb.as_deref())?;
+        added += 1;
+    }
+    app.emit("memory:changed", ()).ok();
+    Ok(added)
+}
+
 /// GIF manifest plus where the GIFs are served, for the pet window.
 #[tauri::command]
 fn get_gif_manifest() -> serde_json::Value {
@@ -345,7 +477,19 @@ pub fn run() {
             get_gif_manifest,
             get_activity,
             get_activity_totals,
-            test_search
+            test_search,
+            memory_status,
+            list_facts,
+            add_fact,
+            update_fact,
+            delete_fact,
+            list_summaries,
+            delete_summary,
+            list_reminders,
+            delete_reminder,
+            clear_memory,
+            export_memory,
+            import_memory
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -391,6 +535,7 @@ pub fn run() {
             tauri::async_runtime::spawn(supervise_ollama(app_handle.clone()));
 
             tauri::async_runtime::spawn(activity::run(app_handle.clone()));
+            tauri::async_runtime::spawn(proactive::run(app_handle.clone()));
 
             let monitor_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {

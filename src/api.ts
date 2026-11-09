@@ -33,6 +33,45 @@ export interface Settings {
   privacyRules: ActivityRule[];
   internetAccess: boolean;
   braveApiKey: string;
+  memoryLearning: boolean;
+  proactive: boolean;
+  proactiveGapMinutes: number;
+  breakAfterMinutes: number;
+  quietStart: string; // "HH:MM"
+  quietEnd: string;
+}
+
+export interface Fact {
+  id: number;
+  text: string;
+  origin: "auto" | "user";
+  created: number;
+  lastUsed: number;
+}
+
+export interface Summary {
+  id: number;
+  ts: number;
+  fromId: number;
+  toId: number;
+  text: string;
+}
+
+export interface Reminder {
+  id: number;
+  dueTs: number;
+  text: string;
+  created: number;
+  done: boolean;
+}
+
+export interface MemoryStatus {
+  embedModel: string;
+  embedReady: boolean;
+  facts: number;
+  summaries: number;
+  messages: number;
+  embeddedMessages: number;
 }
 
 /** Empty fields match anything; app is an exact process name, title/path are substrings. */

@@ -318,6 +318,10 @@ The model decides when to look something up, using Ollama tool calling. `qwen2.5
 **Status:**
 - **M1** is done (steps 0.1–0.4, 1.1–1.5, 1.7). Step 1.6 (optional GPU runner) is still to do.
 - **M2** is done (2.1–2.6, 4.1–4.5). The pet is a WebSocket body. The state machine is shared through `phone/avatar.js`.
+- **M5** is done (5.1–5.5, 6.1–6.4):
+  - Reminders are parsed from the message first (regex), with a `set_reminder` tool as backup.
+  - Fact learning runs every 4 user messages.
+  - Proactive lines skip gaming, video, private windows, idle, away, and the 10 min after a chat.
 - **M4** is done (9.1–9.4, 9.6–9.8). The 9.5 "ask me first" mode isn't built yet; there's only the on/off switch. The search source changed (see Phase 9).
 - **M3** is done for 3.1–3.7. `monitor.rs` stays as its own 5s heavy-app loop rather than being merged into `activity.rs`. 4.6 (art) is yours; 4.7 (ESP32 GIFs) waits for that art.
 

@@ -36,7 +36,7 @@ Plugins:
 - `shell`
 - `autostart`: the entry passes `--minimized`, which skips showing the panel.
 
-The setup hook opens the DB, places and shows the pet, builds the tray, and spawns five long-running async tasks:
+The setup hook opens the DB, places and shows the pet, builds the tray, and spawns six long-running async tasks:
 
 1. **WebSocket server** ([websocket.rs](src-tauri/src/websocket.rs)) on `0.0.0.0:8080`. Each client gets a `tokio::select!` loop that:
    - forwards every message from the shared `broadcast::Sender<String>` to the client, and
@@ -56,6 +56,16 @@ The setup hook opens the DB, places and shows the pet, builds the tray, and spaw
    - **Broadcasts** `{"type":"state"}` when the category or away status changes. New WebSocket clients get the current state when they connect.
    - **Records** `activity_sessions` rows: app, category and times, never titles, pruned after 30 days.
    - **Feeds the prompt:** `prompt_context` gives the brain one system-prompt line. Window titles go in only if `settings.shareTitles` is on.
+6. **Speaking first** ([proactive.rs](src-tauri/src/proactive.rs)): runs every 20s.
+   - **Due reminders** are always delivered, even in quiet hours. While paused they go out as plain text, because the model is unloaded.
+   - **With `settings.proactive` on**, it picks one moment at a time: a greeting about 30s after launch, a welcome back after 20+ min away, a break nudge after `breakAfterMinutes` of coding or creative work, or a check-in after 3h of silence.
+   - **It stays quiet:**
+     - in quiet hours,
+     - within `proactiveGapMinutes` of its last line,
+     - while you're gaming, watching video, in a private window, idle or away,
+     - within 10 min of a chat,
+     - while paused.
+   - **It speaks** through `companion::speak_first`, which skips if a chat is running (reminders wait instead) and saves with source `proactive`.
 
 **Pausing** ([pause.rs](src-tauri/src/pause.rs)): `PauseState { paused, manual, autoReason }`. Manual and auto pause are tracked separately, so auto-resume never undoes a manual pause. Only `pause::set_manual` and `pause::set_auto` change it. Each change:
 - updates `AppState.paused` (which the brain checks),
@@ -74,9 +84,24 @@ Shared state is `AppState { broadcast_tx, ollama_child, ollama_status, paused, p
 **The brain** ([companion.rs](src-tauri/src/companion.rs)) is the only place chat happens. Both the panel (`send_chat_message`) and the bodies go through `handle_user_message(app, source, text)`. It:
 1. takes `chat_lock`, so replies are generated one at a time and history stays in order,
 2. saves the user message,
-3. builds the prompt with `build_messages`: a system prompt from the persona settings plus context lines (the current activity), then the newest history that fits in about 8000 characters / 24 messages,
-4. streams the reply with `ollama::chat_stream`,
-5. saves the reply and broadcasts it.
+3. handles "remember that…" / "forget…" (`memory::parse_command`) and "remind me in 20 min / at 5pm to…" (`reminders::parse_request`) **before** the model, and passes the result in as a note,
+4. builds the prompt with `build_messages`:
+   - a system prompt from the persona settings,
+   - context lines: date, activity, memory recall, the internet line, and the notes,
+   - the newest history that fits in about 8000 characters / `HISTORY_MAX_MESSAGES` (24),
+5. streams the reply with `ollama::chat_stream`, running tool calls in between,
+6. saves the reply, broadcasts it, and calls `memory::after_exchange`.
+
+**Memory** ([memory.rs](src-tauri/src/memory.rs)):
+- **Facts:**
+  - **Stored** in the `facts` table with origin `auto` or `user`.
+  - **In the prompt:** all of them up to 12. Past that, the best matches by meaning, topped up with the newest, 8 in all.
+  - **Learned** by `after_exchange` every 4 user messages, in the background with the chat model (`chat_once`, JSON mode). Near-duplicates (cosine ≥ 0.9) are skipped.
+- **Summaries:** once 20+ messages have scrolled out of the 24-message window, they're summarized, and the latest two summaries go in the prompt.
+- **Recall:** up to 3 older messages that match by meaning.
+- **Embeddings:** "by meaning" uses `nomic-embed-text`, which the user downloads from the Memory tab. Without it, everything works except meaning-based matching. Vectors are f32 BLOBs, with `search_document:` / `search_query:` prefixes, and missing ones are backfilled.
+
+**Reminders** ([reminders.rs](src-tauri/src/reminders.rs)) are set by the regex parser or by the model's `set_reminder` tool, which `generate_reply` handles itself.
 
 **Internet tools** ([tools/](src-tauri/src/tools/)): with `settings.internetAccess` on, the brain sends Ollama a `tools` list. If the model returns `tool_calls`, the brain runs them, adds `role: "tool"` results, and asks again. After `MAX_TOOL_ROUNDS` (3) it has to answer. Models that report "does not support tools" are remembered and get plain chat.
 - `web_search`: the **Brave Search API** when `settings.braveApiKey` is set, otherwise DuckDuckGo's official **Instant Answer API** (quick facts only).
@@ -91,7 +116,16 @@ The system prompt also gets the local date and time from chrono, plus an interne
 
 Past replies are sent back to the model with their `[emotion: x]` tag so it keeps using the format. `extract_emotion` also accepts a bare `[happy]`, and `visible_stream_text` holds back a possible trailing tag while streaming.
 
-**Storage** ([db.rs](src-tauri/src/db.rs)): SQLite (`rusqlite`, bundled) at `%APPDATA%\com.satyam.diy-waifu\companion.db`. It has `messages(id, ts, role, text, emotion, source, sources)`, `settings(key, value)` and `activity_sessions(app, category, start_ts, end_ts)`. To change the schema, append to `MIGRATIONS` (tracked by `PRAGMA user_version`); never edit an entry that has shipped. [settings.rs](src-tauri/src/settings.rs) is one JSON blob under key `settings`, holding model (default `qwen2.5:3b`), companionName, userName, personality, replyLength, autoPause, heavyApps, petVisible, screenAwareness, shareTitles, activityRules, privacyRules, internetAccess and braveApiKey. Every field has a serde default, so old saves still load. Logs go to `%LOCALAPPDATA%\com.satyam.diy-waifu\logs` through `tauri-plugin-log`; use `log::info!` and the like, not `println!`.
+**Storage** ([db.rs](src-tauri/src/db.rs)): SQLite (`rusqlite`, bundled) at `%APPDATA%\com.satyam.diy-waifu\companion.db`. It has:
+- `messages(id, ts, role, text, emotion, source, sources)`
+- `settings(key, value)`
+- `activity_sessions(app, category, start_ts, end_ts)`
+- `facts(text, origin, created, last_used, embedding)`
+- `summaries(from_id, to_id, text)`
+- `message_embeddings(message_id, embedding)`
+- `reminders(due_ts, text, done)`
+
+`clear_messages` also clears summaries and message embeddings. To change the schema, append to `MIGRATIONS` (tracked by `PRAGMA user_version`); never edit an entry that has shipped. [settings.rs](src-tauri/src/settings.rs) is one JSON blob under key `settings`, holding model (default `qwen2.5:3b`), companionName, userName, personality, replyLength, autoPause, heavyApps, petVisible, screenAwareness, shareTitles, activityRules, privacyRules, internetAccess, braveApiKey, memoryLearning, proactive, proactiveGapMinutes, breakAfterMinutes, quietStart and quietEnd. Every field has a serde default, so old saves still load. Logs go to `%LOCALAPPDATA%\com.satyam.diy-waifu\logs` through `tauri-plugin-log`; use `log::info!` and the like, not `println!`.
 
 **Wire protocol** (server → bodies; the broadcast channel goes to **every** client):
 - `{"type":"user","text","source"}`: someone said something.
@@ -110,15 +144,16 @@ Emotions are `happy|sad|thinking|excited|neutral`. Bodies must ignore types they
 - Pause: `set_paused` (manual), `get_pause_state`.
 - Activity: `get_activity`, `get_activity_totals(since)`.
 - Internet: `test_search(braveKey)`.
+- Memory: `memory_status`, `list_facts`, `add_fact`, `update_fact`, `delete_fact`, `list_summaries`, `delete_summary`, `list_reminders`, `delete_reminder`, `clear_memory`, `export_memory`, `import_memory(json)`.
 - Desktop: `get_desktop_state`, `set_pet_visible`, `set_pet_click_through`, `set_autostart`, `open_panel`, `get_gif_manifest`.
 - Bodies: `get_phone_url`.
 
-**Events** (`listen`): `chat:message` (a saved message), `chat:token`, `chat:tool` (lookup label), `chat:busy`, `chat:error`, `settings:changed`, `ollama:status` (`starting|ready|failed`), `model:progress`, `ws:server_status`, `ws:client_connected`, `ws:client_disconnected`, `companion:paused` (`PauseState`), `pet:click_through`, `activity:changed` (`Activity`).
+**Events** (`listen`): `chat:message` (a saved message), `chat:token`, `chat:tool` (lookup label), `chat:busy`, `chat:error`, `settings:changed`, `ollama:status` (`starting|ready|failed`), `model:progress`, `ws:server_status`, `ws:client_connected`, `ws:client_disconnected`, `companion:paused` (`PauseState`), `pet:click_through`, `activity:changed` (`Activity`), `memory:changed` (refresh the Memory tab).
 
 A new command must be added to `generate_handler!` in `lib.rs`. A new plugin permission goes in [src-tauri/capabilities/default.json](src-tauri/capabilities/default.json).
 
 **Frontend:** Vite builds two pages, `index.html` (the panel) and `pet.html`.
-- **Panel:** [src/App.tsx](src/App.tsx) is the shell (header pills and tabs). Each tab is in `src/tabs/` (Chat, Persona, Model, Activity, Bodies, System). Shared types live in [src/api.ts](src/api.ts) and mirror the Rust structs. Tabs stay mounted and are only hidden, so a streaming reply or a download carries on when you switch tabs.
+- **Panel:** [src/App.tsx](src/App.tsx) is the shell (header pills and tabs). Each tab is in `src/tabs/` (Chat, Persona, Memory, Model, Activity, Bodies, System). The Persona tab also holds the speaking-first settings. Shared types live in [src/api.ts](src/api.ts) and mirror the Rust structs. Tabs stay mounted and are only hidden, so a streaming reply or a download carries on when you switch tabs.
 - **Pet:** [src/pet/Pet.tsx](src/pet/Pet.tsx) is a body like the phone. It connects to `ws://127.0.0.1:8080` as `pet`. You drag it by the GIF (`data-tauri-drag-region`), and on hover it shows a chat button and a panel button. Replies appear in a speech bubble that hides after a while.
 
 **Avatar state machine** ([phone/avatar.js](phone/avatar.js), typed by `avatar.d.ts`) is shared by the pet and the phone page. Priority, from highest:
@@ -131,7 +166,7 @@ A new command must be added to `generate_handler!` in `lib.rs`. A new plugin per
 
 `gifFor` maps a state to a file through [gifs/manifest.json](gifs/manifest.json), with fallbacks such as excited → happy → idle → default. **To add art**, drop the GIF in `gifs/` and point a state at it in the manifest. Nothing else changes, and a test checks that every file the manifest names exists. The ESP32 still uses its own compiled-in table.
 
-The roadmap is in [docs/ROADMAP.md](docs/ROADMAP.md). The milestones are: M1 conversation (done), M2 tray, autostart and desktop pet (done), M3 screen awareness (done, apart from the art in 4.6 and the ESP32 GIFs in 4.7), M4 internet access (done: Brave or DuckDuckGo Instant Answer search, page fetch and weather through Ollama tool calls), M5 long-term memory and speaking first, M6 PC voice, M7 hardening.
+The roadmap is in [docs/ROADMAP.md](docs/ROADMAP.md). The milestones are: M1 conversation (done), M2 tray, autostart and desktop pet (done), M3 screen awareness (done, apart from the art in 4.6 and the ESP32 GIFs in 4.7), M4 internet access (done: Brave or DuckDuckGo Instant Answer search, page fetch and weather through Ollama tool calls), M5 long-term memory and speaking first (done), M6 PC voice, M7 hardening.
 
 ## Known gaps
 

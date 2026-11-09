@@ -932,6 +932,7 @@ dependencies = [
  "futures",
  "include_dir",
  "log",
+ "regex",
  "reqwest",
  "rusqlite",
  "scraper",
