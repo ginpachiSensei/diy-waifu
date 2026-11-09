@@ -1,7 +1,7 @@
 # Phone body
 
 Use a spare Android phone as the companion's screen instead of, or alongside, the ESP32.
-It's a plain HTML/JS page with no build step. The Tauri app compiles these files in (see `src-tauri/src/phone.rs`) and serves them on port **8081**. The page connects to the same WebSocket on port **8080** that the ESP32 uses, with the same wire format (`{"emotion", "text"}`).
+It's a plain HTML/JS page with no build step. The Tauri app compiles these files in (see `src-tauri/src/phone.rs`) and serves them on port **8081**. The page connects to the same WebSocket on port **8080** that the ESP32 uses, with the same wire format: it shows `"user"` and streamed `"token"` messages while a reply is being written, then the final `{"type":"reply","emotion","text"}`. See the protocol in `CLAUDE.md`.
 
 ## Use it
 

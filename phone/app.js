@@ -1,6 +1,6 @@
 // Phone "body" for the companion app. Does the same job as esp32/src/main.cpp:
-// connects to the app's WebSocket, receives {"emotion", "text"} and shows them
-// next to the emotion's GIF. Also lets you type or speak a message, and can
+// connects to the app's WebSocket and shows each reply next to the emotion's GIF
+// (it streams in as "token" messages, then a final "reply" with the emotion). Also lets you type or speak a message, and can
 // read replies aloud.
 //
 // The Tauri app serves this page on port 8081. The WebSocket is on 8080 of the
@@ -22,7 +22,7 @@
   const gifForEmotion = (e) => EMOTION_GIFS[e] || EMOTION_GIFS.neutral;
 
   const RECONNECT_MS = 3000;
-  const REPLY_TIMEOUT_MS = 90000; // the server sends nothing back while paused
+  const REPLY_TIMEOUT_MS = 90000; // give up waiting if the app goes quiet mid-reply
 
   const params = new URLSearchParams(location.search);
   const WS_URL = params.get("ws") || `ws://${location.hostname || "localhost"}:8080`;
@@ -50,6 +50,7 @@
   }
 
   function showReply(emotion, text) {
+    streaming = false;
     emotionEl.textContent = emotion;
     textEl.textContent = text;
     textEl.classList.remove("thinking");
@@ -58,14 +59,31 @@
 
   let replyTimer = null;
   function showThinking(userText) {
+    streaming = false;
     emotionEl.textContent = "thinking";
     textEl.textContent = `“${userText}”`;
     textEl.classList.add("thinking");
     setGif("thinking");
+    armReplyTimeout();
+  }
+
+  function armReplyTimeout() {
     clearTimeout(replyTimer);
     replyTimer = setTimeout(() => {
-      showReply("neutral", "No reply. Is the companion paused?");
+      showReply("neutral", "No reply from the companion app.");
     }, REPLY_TIMEOUT_MS);
+  }
+
+  // The first token replaces the quoted message; the rest add on
+  let streaming = false;
+  function appendToken(token) {
+    if (!streaming) {
+      streaming = true;
+      textEl.textContent = "";
+      textEl.classList.remove("thinking");
+    }
+    textEl.textContent += token;
+    armReplyTimeout();
   }
 
   function showStatus(label, cls) {
@@ -86,17 +104,34 @@
       return;
     }
 
-    ws.onopen = () => showStatus("linked", "online");
+    ws.onopen = () => {
+      showStatus("linked", "online");
+      ws.send(JSON.stringify({ type: "hello", body: "phone" }));
+    };
 
     ws.onmessage = (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       if (!msg || typeof msg !== "object") return;
-      clearTimeout(replyTimer);
-      const emotion = typeof msg.emotion === "string" ? msg.emotion.toLowerCase() : "neutral";
       const text = typeof msg.text === "string" ? msg.text : "";
-      showReply(emotion, text);
-      speak(text);
+      // Messages without a type come from older app versions and are replies
+      switch (msg.type || "reply") {
+        case "user": // someone (here or on another body) said something
+          showThinking(text);
+          break;
+        case "token": // a streamed piece of the reply
+          appendToken(text);
+          break;
+        case "reply": {
+          clearTimeout(replyTimer);
+          const emotion = typeof msg.emotion === "string" ? msg.emotion.toLowerCase() : "neutral";
+          showReply(emotion, text);
+          speak(text);
+          break;
+        }
+        default: // "thinking", "state", and anything newer: nothing to show yet
+          break;
+      }
     };
 
     ws.onclose = () => {

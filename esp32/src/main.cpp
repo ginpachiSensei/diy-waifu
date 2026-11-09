@@ -1,9 +1,10 @@
 // ESP32 "body" for the companion app.
 //
 // - Loops an emotion GIF on the left of a 320x240 ILI9341 screen.
-// - Connects to the Tauri app's WebSocket server and listens for
-//   {"emotion": "...", "text": "..."} messages, then shows the text on the right
-//   and switches to that emotion's GIF.
+// - Connects to the Tauri app's WebSocket server. On a {"type":"reply"} message
+//   (or one with no type, from older app versions) it shows the text on the right
+//   and switches to that emotion's GIF. {"type":"user"} shows "thinking" with what
+//   was said. Streamed "token" messages and other types are ignored.
 //
 // GIFs are compiled into flash for now (see tools/gif2header.py). To serve them
 // from the app later, only gifForEmotion()/startGif() need to change.
@@ -216,6 +217,7 @@ void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
     case WStype_CONNECTED:
       Serial.println("WebSocket connected");
       showStatus("App linked", ILI9341_GREEN);
+      ws.sendTXT("{\"type\":\"hello\",\"body\":\"esp32\"}");
       break;
     case WStype_DISCONNECTED:
       Serial.println("WebSocket disconnected");
@@ -228,10 +230,17 @@ void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
         Serial.println("Ignoring non-JSON message");
         return;
       }
-      String emotion = doc["emotion"] | "neutral";
+      String type = doc["type"] | "reply";
       String text = doc["text"] | "";
-      startGif(gifForEmotion(emotion));
-      showReply(emotion, text);
+      if (type == "reply") {
+        String emotion = doc["emotion"] | "neutral";
+        startGif(gifForEmotion(emotion));
+        showReply(emotion, text);
+      } else if (type == "user") {
+        startGif(gifForEmotion("thinking"));
+        showReply("thinking", "\"" + text + "\"");
+      }
+      // "token" (streamed reply pieces), "thinking", "state": nothing to draw yet
       break;
     }
     default:
