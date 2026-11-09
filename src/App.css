@@ -355,3 +355,55 @@ section textarea {
   width: 100%;
   margin-bottom: 6px;
 }
+
+/* ---- Activity ---- */
+
+.grow {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.rules {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.rule {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1.2fr 1.2fr auto;
+  gap: 4px;
+  align-items: center;
+}
+.rule.no-cat {
+  grid-template-columns: 1.2fr 1.2fr 1.2fr auto;
+}
+.rule.head {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.rule input {
+  min-width: 0;
+  padding: 4px 8px;
+}
+.rule-actions {
+  display: flex;
+  gap: 2px;
+}
+.rule-actions button {
+  padding: 2px 8px;
+}

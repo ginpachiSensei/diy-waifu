@@ -21,6 +21,28 @@ export interface Settings {
   autoPause: boolean;
   heavyApps: string[];
   petVisible: boolean;
+  screenAwareness: boolean;
+  shareTitles: boolean;
+  activityRules: ActivityRule[];
+  privacyRules: ActivityRule[];
+}
+
+/** Empty fields match anything; app is an exact process name, title/path are substrings. */
+export interface ActivityRule {
+  category: string;
+  app: string;
+  title: string;
+  path: string;
+}
+
+export interface Activity {
+  enabled: boolean;
+  app: string | null;
+  label: string | null;
+  category: string | null;
+  title: string | null;
+  presence: "active" | "idle" | "away";
+  since: number;
 }
 
 export interface InstalledModel {

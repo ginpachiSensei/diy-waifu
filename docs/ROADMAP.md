@@ -259,6 +259,48 @@ Add new commands for these: `get_history`, `clear_history`, `get_settings`, `set
 
 ---
 
+## Phase 9: Internet access
+
+The model decides when to look something up, using Ollama tool calling. `qwen2.5` supports it. 3B and up are reliable; 1.5B often isn't. Search uses DuckDuckGo with no API key. All tools are read-only.
+
+9.1 **M** **Tool-calling loop in the brain.**
+- `companion.rs` sends a `tools` list with `/api/chat`.
+- When the model returns `tool_calls`, it runs them, adds `role: "tool"` results, and asks again, up to 3 rounds. The final round streams as today.
+- New `src-tauri/src/tools/` module with one file per tool, each with a schema, a function to run it, and a short status label.
+
+9.2 **M** **`web_search(query)`.**
+- `GET https://html.duckduckgo.com/html/?q=…`, parsed with the `scraper` crate, keeping the top 5 results (title, URL, snippet).
+- Results are cached for 10 min per query, and requests are spaced at least 2s apart to avoid rate limits.
+- A parser test runs against a saved results page in `tests/fixtures/`, so a DDG layout change shows up as a failing test, not a silent break.
+
+9.3 **M** **`fetch_page(url)`.**
+- Fetches a page and pulls out the readable text (`article`/`main`/`p` blocks, without scripts and navigation), capped at about 4000 characters.
+- Limits: http(s) only, 10s timeout, 2 MB max, text/HTML only.
+- **SSRF guard:** refuse localhost, private and link-local IPs after DNS resolution. Otherwise the model could reach Ollama on :11434 or the app's own ports.
+
+9.4 **S** **No-network context.**
+- Current date, time and weekday go in the system prompt, so the model doesn't search for "what day is it".
+- Optional `weather(place)` tool using Open-Meteo, which needs no key.
+
+9.5 **S** **Safety and settings.**
+- An "Internet access" toggle, on by default once this ships, and an optional "ask me first" mode. In that mode the panel and pet show "Search the web for X?" with yes/no.
+- Page text is untrusted. It's wrapped as tool output with an instruction not to follow commands found in it. The tools can only read, so the worst case is a wrong answer.
+- Every lookup is logged.
+
+9.6 **S** **Showing it.**
+- Bodies get `{"type":"tool","name","label"}`, e.g. "searching: weather in Delhi". The avatar state is `searching`, which falls back to thinking.
+- Replies keep their source links: a new `sources` column in `messages`, added as a migration, shown under the bubble in the panel.
+
+9.7 **S** **Fallbacks.**
+- If the model rejects `tools` ("does not support tools"), chat continues without tools and the Model tab shows a note.
+- If DDG fails or blocks, the tool returns a clear error, and the model says it couldn't look it up.
+
+9.8 **S** **Tests.**
+- The search parser against the fixture.
+- The SSRF guard (localhost, 10.x, 192.168.x, IPv6 loopback, and a DNS name resolving to a private IP).
+- The tool loop with a fake Ollama response.
+- Readable-text extraction.
+
 ## Order and milestones
 
 | Milestone | Phases | You get |
@@ -266,13 +308,15 @@ Add new commands for these: `get_history`, `clear_history`, `get_settings`, `set
 | M1 "remembers the chat" | 0, 1 | Multi-turn chat, saved history, streaming, persona, model picker |
 | M2 "always there" | 2, 4.1–4.5 | Tray, autostart, floating pet with a speech bubble |
 | M3 "sees what I do" | 3, 4.6–4.7 | Reacts to apps, idle and sleep states, activity-aware replies |
-| M4 "knows me" | 5, 6 | Long-term facts, summaries, proactive lines, reminders |
-| M5 "talks" | 7 | PC voice in and out |
-| M6 "polished" | 8 | Real ESP32, security, cross-platform, CI |
+| M4 "looks things up" | 9 | Web search and page reading through tool calls, shown sources, SSRF-safe |
+| M5 "knows me" | 5, 6 | Long-term facts, summaries, proactive lines (can use the web from M4), reminders |
+| M6 "talks" | 7 | PC voice in and out |
+| M7 "polished" | 8 | Real ESP32, security, cross-platform, CI |
 
 **Status:**
 - **M1** is done (steps 0.1–0.4, 1.1–1.5, 1.7). Step 1.6 (optional GPU runner) is still to do.
 - **M2** is done (2.1–2.6, 4.1–4.5). The pet is a WebSocket body. The state machine is shared through `phone/avatar.js`.
+- **M3** is done for 3.1–3.7. `monitor.rs` stays as its own 5s heavy-app loop rather than being merged into `activity.rs`. 4.6 (art) is yours; 4.7 (ESP32 GIFs) waits for that art.
 
 ## Critical files
 
@@ -318,10 +362,14 @@ Add new commands for these: `get_history`, `clear_history`, `get_settings`, `set
   - Focusing VS Code, then YouTube, then the desktop changes the pet's GIF within about 2s.
   - Being idle for 5+ minutes makes it sleep.
   - A blocklisted app never shows up in logs or the DB.
-- **M4:**
+- **M4 (internet):**
+  - "What's the weather in Delhi today?" and "who won yesterday's match?" trigger a search, the pet shows "searching", and the reply lists its sources.
+  - Asking it to fetch `http://localhost:11434` or `http://192.168.1.1` is refused.
+  - With the internet toggle off, it says it can't look things up.
+- **M5 (memory):**
   - A fact from days ago is recalled.
   - The Memory tab edit and delete work.
   - "remind me in 1 min" fires.
   - Proactive lines respect the frequency limit and quiet hours.
-- **M5:**
+- **M6 (voice):**
   - Hold the hotkey → speech is transcribed → the spoken reply plays, and the pet shows "talking".

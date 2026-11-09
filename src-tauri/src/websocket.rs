@@ -5,7 +5,7 @@
 
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
-use tauri::Emitter as _;
+use tauri::{Emitter as _, Manager as _};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -47,6 +47,13 @@ pub async fn start_server(
             app_handle
                 .emit("ws:client_connected", client_addr.to_string())
                 .ok();
+            // Catch the new body up on what the user is doing
+            let current = app_handle.state::<crate::AppState>().activity.lock().unwrap().clone();
+            for msg in crate::activity::state_messages(&current) {
+                if write.send(Message::Text(msg)).await.is_err() {
+                    return;
+                }
+            }
             // Until the client says hello we don't know what it is
             let mut body = "body".to_string();
 

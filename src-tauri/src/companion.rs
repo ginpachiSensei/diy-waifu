@@ -48,9 +48,14 @@ pub fn system_prompt(s: &Settings) -> String {
     p
 }
 
-/// System prompt plus as much recent history as fits. `history` is oldest
-/// first and already ends with the new user message.
-pub fn build_messages(settings: &Settings, history: &[StoredMessage]) -> Vec<ChatMessage> {
+/// System prompt (plus optional context lines, e.g. what app the user is in)
+/// and as much recent history as fits. `history` is oldest first and already
+/// ends with the new user message.
+pub fn build_messages(
+    settings: &Settings,
+    context: &[String],
+    history: &[StoredMessage],
+) -> Vec<ChatMessage> {
     let mut picked: Vec<ChatMessage> = Vec::new();
     let mut used = 0;
     for m in history.iter().rev() {
@@ -70,7 +75,12 @@ pub fn build_messages(settings: &Settings, history: &[StoredMessage]) -> Vec<Cha
     }
     picked.reverse();
 
-    let mut out = vec![ChatMessage::new("system", system_prompt(settings))];
+    let mut system = system_prompt(settings);
+    for line in context {
+        system.push('\n');
+        system.push_str(line);
+    }
+    let mut out = vec![ChatMessage::new("system", system)];
     out.extend(picked);
     out
 }
@@ -135,7 +145,11 @@ pub async fn handle_user_message(
 async fn generate_reply(app: &tauri::AppHandle, db: &Db) -> Result<StoredMessage, String> {
     let settings = Settings::load(db);
     let history = db.recent_messages(HISTORY_MAX_MESSAGES)?;
-    let messages = build_messages(&settings, &history);
+    let activity = app.state::<AppState>().activity.lock().unwrap().clone();
+    let context: Vec<String> = crate::activity::prompt_context(&activity, &settings)
+        .into_iter()
+        .collect();
+    let messages = build_messages(&settings, &context, &history);
 
     let raw = ollama::chat_stream(&settings.model, &messages, |delta| {
         app.emit("chat:token", delta).ok();
@@ -193,7 +207,7 @@ mod tests {
             msg("assistant", "hello!", Some("happy")),
             msg("user", "how are you?", None),
         ];
-        let out = build_messages(&Settings::default(), &history);
+        let out = build_messages(&Settings::default(), &[], &history);
         let roles: Vec<_> = out.iter().map(|m| m.role.as_str()).collect();
         assert_eq!(roles, ["system", "user", "assistant", "user"]);
         assert_eq!(out[2].content, "hello!\n[emotion: happy]");
@@ -204,12 +218,22 @@ mod tests {
     fn history_is_trimmed_to_budget_from_the_oldest_end() {
         let long = "x".repeat(3000);
         let history: Vec<_> = (0..6).map(|_| msg("user", &long, None)).collect();
-        let out = build_messages(&Settings::default(), &history);
+        let out = build_messages(&Settings::default(), &[], &history);
         // 8000-char budget fits two 3000-char messages
         assert_eq!(out.len(), 1 + 2);
 
         // A single oversized newest message is still sent
         let huge = [msg("user", &"y".repeat(20_000), None)];
-        assert_eq!(build_messages(&Settings::default(), &huge).len(), 2);
+        assert_eq!(build_messages(&Settings::default(), &[], &huge).len(), 2);
+    }
+
+    #[test]
+    fn context_lines_go_in_the_system_prompt() {
+        let out = build_messages(
+            &Settings::default(),
+            &["Right now the user is using VS Code (coding).".into()],
+            &[msg("user", "hi", None)],
+        );
+        assert!(out[0].content.ends_with("VS Code (coding)."));
     }
 }

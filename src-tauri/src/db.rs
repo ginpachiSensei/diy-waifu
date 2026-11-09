@@ -21,6 +21,16 @@ const MIGRATIONS: &[&str] = &["
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );
+", "
+    -- One row per stretch of time in one app + category. No window titles.
+    CREATE TABLE activity_sessions (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        app      TEXT NOT NULL,
+        category TEXT NOT NULL,
+        start_ts INTEGER NOT NULL,
+        end_ts   INTEGER NOT NULL
+    );
+    CREATE INDEX activity_sessions_start ON activity_sessions(start_ts);
 "];
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -131,6 +141,52 @@ impl Db {
             .map_err(err)
     }
 
+    // ---- Activity sessions ----
+
+    pub fn start_session(&self, app: &str, category: &str, ts: i64) -> Result<i64, String> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO activity_sessions (app, category, start_ts, end_ts) VALUES (?1, ?2, ?3, ?3)",
+            params![app, category, ts],
+        )
+        .map_err(err)?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn touch_session(&self, id: i64, end_ts: i64) -> Result<(), String> {
+        self.conn()
+            .execute(
+                "UPDATE activity_sessions SET end_ts = ?2 WHERE id = ?1",
+                params![id, end_ts],
+            )
+            .map(|_| ())
+            .map_err(err)
+    }
+
+    pub fn prune_sessions(&self, before_ts: i64) -> Result<(), String> {
+        self.conn()
+            .execute("DELETE FROM activity_sessions WHERE end_ts < ?1", [before_ts])
+            .map(|_| ())
+            .map_err(err)
+    }
+
+    /// Total milliseconds per category in sessions overlapping [from, now), biggest first.
+    pub fn category_totals_since(&self, from: i64) -> Result<Vec<(String, i64)>, String> {
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT category, SUM(end_ts - MAX(start_ts, ?1)) AS ms FROM activity_sessions
+                 WHERE end_ts > ?1 GROUP BY category ORDER BY ms DESC",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map([from], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(err)?
+            .collect::<Result<_, _>>()
+            .map_err(err)?;
+        Ok(rows)
+    }
+
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, String> {
         self.conn()
             .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
@@ -179,6 +235,22 @@ mod tests {
 
         db.clear_messages().unwrap();
         assert!(db.recent_messages(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn activity_totals_clip_to_window() {
+        let db = Db::open_in_memory().unwrap();
+        let a = db.start_session("code.exe", "coding", 1_000).unwrap();
+        db.touch_session(a, 5_000).unwrap();
+        let b = db.start_session("chrome.exe", "video", 5_000).unwrap();
+        db.touch_session(b, 6_000).unwrap();
+        // Only the part after t=3000 counts
+        assert_eq!(
+            db.category_totals_since(3_000).unwrap(),
+            vec![("coding".to_string(), 2_000), ("video".to_string(), 1_000)]
+        );
+        db.prune_sessions(5_500).unwrap();
+        assert_eq!(db.category_totals_since(0).unwrap().len(), 1);
     }
 
     #[test]

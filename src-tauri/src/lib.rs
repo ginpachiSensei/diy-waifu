@@ -1,3 +1,4 @@
+mod activity;
 mod companion;
 mod db;
 mod desktop;
@@ -30,6 +31,8 @@ pub struct AppState {
     pub paused: AtomicBool,
     pub pause: Mutex<PauseState>,
     pub shutting_down: AtomicBool,
+    /// What the user is doing right now (see activity.rs)
+    pub activity: Mutex<activity::Activity>,
     /// Held while a reply is being generated, so replies happen one at a time
     pub chat_lock: tokio::sync::Mutex<()>,
 }
@@ -226,6 +229,20 @@ fn open_panel(app: tauri::AppHandle) {
     desktop::show_main(&app);
 }
 
+// ---- Activity ----
+
+#[tauri::command]
+fn get_activity(state: tauri::State<'_, AppState>) -> activity::Activity {
+    state.activity.lock().unwrap().clone()
+}
+
+/// Milliseconds per category since `since` (unix millis). The panel passes
+/// local midnight, which it knows and Rust (without a timezone crate) doesn't.
+#[tauri::command]
+fn get_activity_totals(db: tauri::State<'_, Db>, since: i64) -> Result<Vec<(String, i64)>, String> {
+    db.category_totals_since(since)
+}
+
 /// GIF manifest plus where the GIFs are served, for the pet window.
 #[tauri::command]
 fn get_gif_manifest() -> serde_json::Value {
@@ -280,6 +297,7 @@ pub fn run() {
             paused: AtomicBool::new(false),
             pause: Mutex::new(PauseState::default()),
             shutting_down: AtomicBool::new(false),
+            activity: Mutex::new(activity::Activity::default()),
             chat_lock: tokio::sync::Mutex::new(()),
         })
         .manage(desktop::PetState::default())
@@ -315,7 +333,9 @@ pub fn run() {
             set_pet_click_through,
             set_autostart,
             open_panel,
-            get_gif_manifest
+            get_gif_manifest,
+            get_activity,
+            get_activity_totals
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -359,6 +379,8 @@ pub fn run() {
             });
 
             tauri::async_runtime::spawn(supervise_ollama(app_handle.clone()));
+
+            tauri::async_runtime::spawn(activity::run(app_handle.clone()));
 
             let monitor_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {

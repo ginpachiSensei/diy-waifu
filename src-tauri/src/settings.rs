@@ -1,6 +1,7 @@
 //! User-editable settings, stored as one JSON blob in the `settings` table.
 //! New fields need a default so older saved settings still load.
 
+use crate::activity::{default_privacy_rules, default_rules, ActivityRule};
 use crate::db::Db;
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +41,12 @@ pub struct Settings {
     /// Process names, matched case-insensitively (e.g. "blender.exe")
     pub heavy_apps: Vec<String>,
     pub pet_visible: bool,
+    /// Watch which app is in front (see activity.rs)
+    pub screen_awareness: bool,
+    /// Include the window title in what the model is told
+    pub share_titles: bool,
+    pub activity_rules: Vec<ActivityRule>,
+    pub privacy_rules: Vec<ActivityRule>,
 }
 
 impl Default for Settings {
@@ -57,6 +64,10 @@ impl Default for Settings {
                 .map(String::from)
                 .to_vec(),
             pet_visible: true,
+            screen_awareness: true,
+            share_titles: false,
+            activity_rules: default_rules(),
+            privacy_rules: default_privacy_rules(),
         }
     }
 }
@@ -95,6 +106,29 @@ impl Settings {
             .iter()
             .map(|a| a.trim().to_lowercase())
             .filter(|a| !a.is_empty())
+            .collect();
+        let clean_rules = |rules: Vec<ActivityRule>| -> Vec<ActivityRule> {
+            rules
+                .into_iter()
+                .map(|r| ActivityRule {
+                    category: r.category.trim().to_lowercase(),
+                    app: r.app.trim().to_lowercase(),
+                    title: r.title.trim().to_string(),
+                    path: r.path.trim().to_string(),
+                })
+                .filter(|r| !(r.app.is_empty() && r.title.is_empty() && r.path.is_empty()))
+                .collect()
+        };
+        self.activity_rules = clean_rules(self.activity_rules)
+            .into_iter()
+            .filter(|r| !r.category.is_empty())
+            .collect();
+        self.privacy_rules = clean_rules(self.privacy_rules)
+            .into_iter()
+            .map(|r| ActivityRule {
+                category: "private".into(),
+                ..r
+            })
             .collect();
         self.heavy_apps.sort();
         self.heavy_apps.dedup();
