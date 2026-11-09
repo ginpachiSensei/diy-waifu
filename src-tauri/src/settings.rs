@@ -62,6 +62,18 @@ pub struct Settings {
     /// "HH:MM"; no unprompted lines (except reminders) between these
     pub quiet_start: String,
     pub quiet_end: String,
+    /// Push-to-talk speech input (voice.rs)
+    pub voice_input: bool,
+    /// Whisper model id from voice::MODELS
+    pub whisper_model: String,
+    /// Hold this to talk, e.g. "Ctrl+Shift+Space"
+    pub ptt_shortcut: String,
+    /// Read replies aloud from the pet (Windows voices)
+    pub speak_replies: bool,
+    /// Windows voice name; empty = the default voice
+    pub tts_voice: String,
+    pub tts_rate: f32,
+    pub tts_pitch: f32,
 }
 
 impl Default for Settings {
@@ -91,6 +103,13 @@ impl Default for Settings {
             break_after_minutes: 120,
             quiet_start: "23:00".into(),
             quiet_end: "08:00".into(),
+            voice_input: true,
+            whisper_model: "base.en".into(),
+            ptt_shortcut: "Ctrl+Shift+Space".into(),
+            speak_replies: false,
+            tts_voice: String::new(),
+            tts_rate: 1.0,
+            tts_pitch: 1.1,
         }
     }
 }
@@ -123,6 +142,12 @@ impl Settings {
         self.personality = self.personality.trim().to_string();
         self.brave_api_key = self.brave_api_key.trim().to_string();
         self.proactive_gap_minutes = self.proactive_gap_minutes.clamp(5, 24 * 60);
+        self.ptt_shortcut = self.ptt_shortcut.trim().to_string();
+        self.tts_rate = self.tts_rate.clamp(0.5, 2.0);
+        self.tts_pitch = self.tts_pitch.clamp(0.5, 2.0);
+        if !crate::voice::MODELS.iter().any(|m| m.0 == self.whisper_model) {
+            self.whisper_model = Self::default().whisper_model;
+        }
         self.break_after_minutes = self.break_after_minutes.clamp(15, 12 * 60);
         for t in [&self.quiet_start, &self.quiet_end] {
             if chrono::NaiveTime::parse_from_str(t.trim(), "%H:%M").is_err() {

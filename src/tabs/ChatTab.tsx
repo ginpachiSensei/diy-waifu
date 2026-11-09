@@ -8,6 +8,7 @@ const SOURCE_LABEL: Record<string, string> = {
   phone: "via phone",
   esp32: "via ESP32",
   pet: "via pet",
+  voice: "spoken",
   body: "via body",
 };
 

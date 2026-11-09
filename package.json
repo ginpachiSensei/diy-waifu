@@ -9,8 +9,9 @@
     "preview": "vite preview",
     "setup:ollama": "node setup-ollama.cjs",
     "tauri": "tauri",
-    "tauri:dev": "npm run setup:ollama && tauri dev",
-    "tauri:build": "npm run setup:ollama && tauri build"
+    "tauri:dev": "npm run setup:ollama && npm run setup:whisper && tauri dev",
+    "tauri:build": "npm run setup:ollama && npm run setup:whisper && tauri build",
+    "setup:whisper": "node setup-whisper.cjs"
   },
   "dependencies": {
     "react": "^19.1.0",

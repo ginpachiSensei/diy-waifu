@@ -10,8 +10,9 @@ import BodiesTab from "./tabs/BodiesTab";
 import SystemTab from "./tabs/SystemTab";
 import ActivityTab from "./tabs/ActivityTab";
 import MemoryTab from "./tabs/MemoryTab";
+import VoiceTab from "./tabs/VoiceTab";
 
-const TABS = ["Chat", "Persona", "Memory", "Model", "Activity", "Bodies", "System"] as const;
+const TABS = ["Chat", "Persona", "Memory", "Voice", "Model", "Activity", "Bodies", "System"] as const;
 type Tab = (typeof TABS)[number];
 
 function App() {
@@ -101,6 +102,9 @@ function App() {
         </div>
         <div hidden={tab !== "Persona"}>
           <PersonaTab settings={settings} onSaved={setSettings} />
+        </div>
+        <div hidden={tab !== "Voice"}>
+          <VoiceTab settings={settings} onSaved={setSettings} />
         </div>
         <div hidden={tab !== "Model"}>
           <ModelTab

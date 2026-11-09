@@ -18,6 +18,7 @@ npm install
 npm run tauri:dev      # downloads Ollama sidecar if missing, then runs the full app (Vite on :1420 + Rust)
 npm run tauri:build    # same sidecar step, then a release bundle
 npm run setup:ollama   # just fetch the Ollama binary into src-tauri/binaries/
+npm run setup:whisper  # just fetch the pinned, SHA-256-checked whisper.cpp server into src-tauri/binaries/whisper/
 npm run dev            # frontend only in a browser (Tauri invoke/listen calls will fail)
 npm run build          # tsc type-check + vite build (the only frontend "lint")
 ```
@@ -26,12 +27,15 @@ Rust-only checks, run from `src-tauri/`: `cargo check`, `cargo clippy`, `cargo t
 
 The Ollama sidecar lives in `src-tauri/binaries/` (gitignored) and has two parts that must ship together. `ollama-<target-triple>[.exe]` is bundled through `bundle.externalBin`. `lib/ollama/` holds the model runner (`llama-server` plus ggml DLLs) and is bundled through `bundle.resources`. Ollama looks for `lib/ollama` next to its own exe, and Tauri copies resources into `target/debug` in dev. If the runner is missing, Ollama still starts but every `/api/chat` returns 500. `setup-ollama.cjs` downloads both and copies only the CPU runner, skipping the CUDA, ROCm and Vulkan folders.
 
+The speech-to-text engine works the same way. `setup-whisper.cjs` downloads whisper.cpp release `b5454` (`whisper-bin-x64.zip`) and checks its hash. It keeps only `whisper-server.exe`, `whisper.dll` and the `ggml*.dll` files in `src-tauri/binaries/whisper/`, which is bundled through `resources` as `whisper/`. It isn't an `externalBin`: `voice.rs` starts it itself with `tokio::process`. Speech models are downloaded at runtime into `%APPDATA%\com.satyam.diy-waifu\whisper\`.
+
 ## Architecture
 
 Everything starts in `run()` in [src-tauri/src/lib.rs](src-tauri/src/lib.rs).
 
 Plugins:
 - `single-instance` (registered first): a second launch shows the panel instead.
+- `global-shortcut`: the push-to-talk key. Its handler calls `voice::on_shortcut` for each press and release.
 - `log`
 - `shell`
 - `autostart`: the entry passes `--minimized`, which skips showing the panel.
@@ -103,6 +107,14 @@ Shared state is `AppState { broadcast_tx, ollama_child, ollama_status, paused, p
 
 **Reminders** ([reminders.rs](src-tauri/src/reminders.rs)) are set by the regex parser or by the model's `set_reminder` tool, which `generate_reply` handles itself.
 
+**Voice** ([voice.rs](src-tauri/src/voice.rs)):
+- **Push-to-talk:** hold `settings.pttShortcut` (default Ctrl+Shift+Space) or the pet's 🎤 button (`voice_start` / `voice_stop`).
+- **Recording:** cpal records the default microphone on its own thread (cpal streams aren't `Send`), for 60s at most.
+- **Speech-to-text:** on release, the audio is downmixed to mono, resampled to 16 kHz and made into a WAV. It goes to `whisper-server` at `127.0.0.1:8178` via `/inference`. The server starts on first use and is stopped after 10 idle minutes.
+- **Result:** noise like `[BLANK_AUDIO]` is dropped. The text goes to `handle_user_message` with source `voice`.
+- **Status:** `voice:state` reports `idle|listening|transcribing|error`.
+- **Speaking replies:** done in the pet window with WebView2's `speechSynthesis` (the Windows voices; [src/speech.ts](src/speech.ts)), when `settings.speakReplies` is on. Starting to listen cancels speech.
+
 **Internet tools** ([tools/](src-tauri/src/tools/)): with `settings.internetAccess` on, the brain sends Ollama a `tools` list. If the model returns `tool_calls`, the brain runs them, adds `role: "tool"` results, and asks again. After `MAX_TOOL_ROUNDS` (3) it has to answer. Models that report "does not support tools" are remembered and get plain chat.
 - `web_search`: the **Brave Search API** when `settings.braveApiKey` is set, otherwise DuckDuckGo's official **Instant Answer API** (quick facts only).
   - **Don't scrape search engines' HTML pages.** DuckDuckGo and Google serve automated clients a bot challenge, and getting around it is off-limits.
@@ -125,7 +137,7 @@ Past replies are sent back to the model with their `[emotion: x]` tag so it keep
 - `message_embeddings(message_id, embedding)`
 - `reminders(due_ts, text, done)`
 
-`clear_messages` also clears summaries and message embeddings. To change the schema, append to `MIGRATIONS` (tracked by `PRAGMA user_version`); never edit an entry that has shipped. [settings.rs](src-tauri/src/settings.rs) is one JSON blob under key `settings`, holding model (default `qwen2.5:3b`), companionName, userName, personality, replyLength, autoPause, heavyApps, petVisible, screenAwareness, shareTitles, activityRules, privacyRules, internetAccess, braveApiKey, memoryLearning, proactive, proactiveGapMinutes, breakAfterMinutes, quietStart and quietEnd. Every field has a serde default, so old saves still load. Logs go to `%LOCALAPPDATA%\com.satyam.diy-waifu\logs` through `tauri-plugin-log`; use `log::info!` and the like, not `println!`.
+`clear_messages` also clears summaries and message embeddings. To change the schema, append to `MIGRATIONS` (tracked by `PRAGMA user_version`); never edit an entry that has shipped. [settings.rs](src-tauri/src/settings.rs) is one JSON blob under key `settings`, holding model (default `qwen2.5:3b`), companionName, userName, personality, replyLength, autoPause, heavyApps, petVisible, screenAwareness, shareTitles, activityRules, privacyRules, internetAccess, braveApiKey, memoryLearning, proactive, proactiveGapMinutes, breakAfterMinutes, quietStart, quietEnd, voiceInput, whisperModel, pttShortcut, speakReplies, ttsVoice, ttsRate and ttsPitch. Every field has a serde default, so old saves still load. Logs go to `%LOCALAPPDATA%\com.satyam.diy-waifu\logs` through `tauri-plugin-log`; use `log::info!` and the like, not `println!`.
 
 **Wire protocol** (server → bodies; the broadcast channel goes to **every** client):
 - `{"type":"user","text","source"}`: someone said something.
@@ -144,16 +156,17 @@ Emotions are `happy|sad|thinking|excited|neutral`. Bodies must ignore types they
 - Pause: `set_paused` (manual), `get_pause_state`.
 - Activity: `get_activity`, `get_activity_totals(since)`.
 - Internet: `test_search(braveKey)`.
+- Voice: `voice_status`, `download_voice_model(id)`, `delete_voice_model(id)`, `voice_start`, `voice_stop`.
 - Memory: `memory_status`, `list_facts`, `add_fact`, `update_fact`, `delete_fact`, `list_summaries`, `delete_summary`, `list_reminders`, `delete_reminder`, `clear_memory`, `export_memory`, `import_memory(json)`.
 - Desktop: `get_desktop_state`, `set_pet_visible`, `set_pet_click_through`, `set_autostart`, `open_panel`, `get_gif_manifest`.
 - Bodies: `get_phone_url`.
 
-**Events** (`listen`): `chat:message` (a saved message), `chat:token`, `chat:tool` (lookup label), `chat:busy`, `chat:error`, `settings:changed`, `ollama:status` (`starting|ready|failed`), `model:progress`, `ws:server_status`, `ws:client_connected`, `ws:client_disconnected`, `companion:paused` (`PauseState`), `pet:click_through`, `activity:changed` (`Activity`), `memory:changed` (refresh the Memory tab).
+**Events** (`listen`): `chat:message` (a saved message), `chat:token`, `chat:tool` (lookup label), `chat:busy`, `chat:error`, `settings:changed`, `ollama:status` (`starting|ready|failed`), `model:progress`, `ws:server_status`, `ws:client_connected`, `ws:client_disconnected`, `companion:paused` (`PauseState`), `pet:click_through`, `activity:changed` (`Activity`), `memory:changed` (refresh the Memory tab), `voice:state`, `voice:progress`, `voice:transcript`.
 
 A new command must be added to `generate_handler!` in `lib.rs`. A new plugin permission goes in [src-tauri/capabilities/default.json](src-tauri/capabilities/default.json).
 
 **Frontend:** Vite builds two pages, `index.html` (the panel) and `pet.html`.
-- **Panel:** [src/App.tsx](src/App.tsx) is the shell (header pills and tabs). Each tab is in `src/tabs/` (Chat, Persona, Memory, Model, Activity, Bodies, System). The Persona tab also holds the speaking-first settings. Shared types live in [src/api.ts](src/api.ts) and mirror the Rust structs. Tabs stay mounted and are only hidden, so a streaming reply or a download carries on when you switch tabs.
+- **Panel:** [src/App.tsx](src/App.tsx) is the shell (header pills and tabs). Each tab is in `src/tabs/` (Chat, Persona, Memory, Voice, Model, Activity, Bodies, System). The Persona tab also holds the speaking-first settings. Shared types live in [src/api.ts](src/api.ts) and mirror the Rust structs. Tabs stay mounted and are only hidden, so a streaming reply or a download carries on when you switch tabs.
 - **Pet:** [src/pet/Pet.tsx](src/pet/Pet.tsx) is a body like the phone. It connects to `ws://127.0.0.1:8080` as `pet`. You drag it by the GIF (`data-tauri-drag-region`), and on hover it shows a chat button and a panel button. Replies appear in a speech bubble that hides after a while.
 
 **Avatar state machine** ([phone/avatar.js](phone/avatar.js), typed by `avatar.d.ts`) is shared by the pet and the phone page. Priority, from highest:
@@ -166,7 +179,7 @@ A new command must be added to `generate_handler!` in `lib.rs`. A new plugin per
 
 `gifFor` maps a state to a file through [gifs/manifest.json](gifs/manifest.json), with fallbacks such as excited → happy → idle → default. **To add art**, drop the GIF in `gifs/` and point a state at it in the manifest. Nothing else changes, and a test checks that every file the manifest names exists. The ESP32 still uses its own compiled-in table.
 
-The roadmap is in [docs/ROADMAP.md](docs/ROADMAP.md). The milestones are: M1 conversation (done), M2 tray, autostart and desktop pet (done), M3 screen awareness (done, apart from the art in 4.6 and the ESP32 GIFs in 4.7), M4 internet access (done: Brave or DuckDuckGo Instant Answer search, page fetch and weather through Ollama tool calls), M5 long-term memory and speaking first (done), M6 PC voice, M7 hardening.
+The roadmap is in [docs/ROADMAP.md](docs/ROADMAP.md). The milestones are: M1 conversation (done), M2 tray, autostart and desktop pet (done), M3 screen awareness (done, apart from the art in 4.6 and the ESP32 GIFs in 4.7), M4 internet access (done: Brave or DuckDuckGo Instant Answer search, page fetch and weather through Ollama tool calls), M5 long-term memory and speaking first (done), M6 PC voice (done: Whisper push-to-talk and Windows voices; Piper voices are a later upgrade), M7 hardening.
 
 ## Known gaps
 

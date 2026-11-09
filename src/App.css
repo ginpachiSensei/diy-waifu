@@ -477,3 +477,13 @@ fieldset.group legend {
 label.inline input[type="number"] {
   width: 72px;
 }
+
+section label.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+section label.inline input:not([type="range"]),
+section label.inline select {
+  min-width: 0;
+}

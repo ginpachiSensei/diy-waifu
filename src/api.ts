@@ -39,6 +39,38 @@ export interface Settings {
   breakAfterMinutes: number;
   quietStart: string; // "HH:MM"
   quietEnd: string;
+  voiceInput: boolean;
+  whisperModel: string;
+  pttShortcut: string;
+  speakReplies: boolean;
+  ttsVoice: string;
+  ttsRate: number;
+  ttsPitch: number;
+}
+
+export interface VoiceModel {
+  id: string;
+  sizeMb: number;
+  note: string;
+  downloaded: boolean;
+}
+
+export interface VoiceStatus {
+  models: VoiceModel[];
+  microphone: string | null;
+  recording: boolean;
+}
+
+export interface VoiceState {
+  state: "idle" | "listening" | "transcribing" | "error";
+  error: string | null;
+}
+
+export interface VoiceProgress {
+  model: string;
+  completed: number;
+  total: number | null;
+  done?: boolean;
 }
 
 export interface Fact {

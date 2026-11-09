@@ -47,7 +47,8 @@
       "binaries/ollama"
     ],
     "resources": {
-      "binaries/lib/ollama/": "lib/ollama/"
+      "binaries/lib/ollama/": "lib/ollama/",
+      "binaries/whisper/": "whisper/"
     },
     "icon": [
       "icons/32x32.png",

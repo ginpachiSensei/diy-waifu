@@ -11,6 +11,7 @@ mod reminders;
 mod phone;
 mod settings;
 mod tools;
+mod voice;
 mod websocket;
 
 use db::{Db, StoredMessage};
@@ -131,6 +132,11 @@ fn save_settings(
         });
     }
     app.emit("settings:changed", &settings).ok();
+    if old.ptt_shortcut != settings.ptt_shortcut || old.voice_input != settings.voice_input {
+        if let Some(problem) = voice::register_shortcut(&app) {
+            return Err(problem);
+        }
+    }
     Ok(settings)
 }
 
@@ -384,6 +390,47 @@ async fn import_memory(app: tauri::AppHandle, db: tauri::State<'_, Db>, json: St
     Ok(added)
 }
 
+// ---- Voice ----
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VoiceStatus {
+    models: Vec<voice::ModelInfo>,
+    microphone: Option<String>,
+    recording: bool,
+}
+
+#[tauri::command]
+fn voice_status(app: tauri::AppHandle) -> VoiceStatus {
+    VoiceStatus {
+        models: voice::list_models(&app),
+        microphone: voice::input_device_name(),
+        recording: voice::is_recording(&app),
+    }
+}
+
+#[tauri::command]
+async fn download_voice_model(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    voice::download_model(&app, &id).await
+}
+
+#[tauri::command]
+async fn delete_voice_model(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    voice::delete_model(&app, &id).await
+}
+
+/// Pet mic button pressed
+#[tauri::command]
+fn voice_start(app: tauri::AppHandle) -> Result<(), String> {
+    voice::start(&app)
+}
+
+/// Pet mic button released
+#[tauri::command]
+async fn voice_stop(app: tauri::AppHandle) {
+    voice::stop_and_send(&app).await;
+}
+
 /// GIF manifest plus where the GIFs are served, for the pet window.
 #[tauri::command]
 fn get_gif_manifest() -> serde_json::Value {
@@ -425,6 +472,14 @@ pub fn run() {
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
                 .build(),
         )
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    use tauri_plugin_global_shortcut::ShortcutState;
+                    voice::on_shortcut(app, event.state() == ShortcutState::Pressed);
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::init(
@@ -442,6 +497,7 @@ pub fn run() {
             chat_lock: tokio::sync::Mutex::new(()),
         })
         .manage(desktop::PetState::default())
+        .manage(voice::VoiceState::default())
         .on_window_event(|window, event| match event {
             // Closing a window only hides it; Quit is in the tray
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -489,7 +545,12 @@ pub fn run() {
             delete_reminder,
             clear_memory,
             export_memory,
-            import_memory
+            import_memory,
+            voice_status,
+            download_voice_model,
+            delete_voice_model,
+            voice_start,
+            voice_stop
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -536,6 +597,8 @@ pub fn run() {
 
             tauri::async_runtime::spawn(activity::run(app_handle.clone()));
             tauri::async_runtime::spawn(proactive::run(app_handle.clone()));
+            tauri::async_runtime::spawn(voice::idle_reaper(app_handle.clone()));
+            voice::register_shortcut(&app_handle);
 
             let monitor_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
@@ -550,6 +613,7 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let state = app_handle.state::<AppState>();
                 state.shutting_down.store(true, Ordering::Relaxed);
+                voice::kill_server_now(app_handle);
                 if let Some(child) = state.ollama_child.lock().unwrap().take() {
                     let _ = child.kill();
                     log::info!("Ollama sidecar killed on exit");

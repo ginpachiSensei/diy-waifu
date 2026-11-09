@@ -318,6 +318,11 @@ The model decides when to look something up, using Ollama tool calling. `qwen2.5
 **Status:**
 - **M1** is done (steps 0.1–0.4, 1.1–1.5, 1.7). Step 1.6 (optional GPU runner) is still to do.
 - **M2** is done (2.1–2.6, 4.1–4.5). The pet is a WebSocket body. The state machine is shared through `phone/avatar.js`.
+- **M6** is done for 7.1, plus 7.2 using Windows voices:
+  - **Speech-to-text:** a pinned whisper.cpp server (`b5454`) running as a side process, started when first used. Models are downloaded from the Voice tab.
+  - **Push-to-talk:** a global hotkey, or the pet's mic button.
+  - **Speaking:** WebView2 `speechSynthesis` in the pet.
+  - **Not done yet:** Piper neural voices (the rest of 7.2) and the hands-free wake word (7.3).
 - **M5** is done (5.1–5.5, 6.1–6.4):
   - Reminders are parsed from the message first (regex), with a `set_reminder` tool as backup.
   - Fact learning runs every 4 user messages.

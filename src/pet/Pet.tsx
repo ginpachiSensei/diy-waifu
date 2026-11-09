@@ -5,6 +5,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import type { Settings, VoiceState } from "../api";
+import { speak, stopSpeaking } from "../speech";
 import { createAvatar, gifFor, CompanionMessage, GifManifest } from "../../phone/avatar.js";
 
 const WS_URL = "ws://127.0.0.1:8080";
@@ -23,6 +26,9 @@ export default function Pet() {
   const [chatOpen, setChatOpen] = useState(false);
   const [input, setInput] = useState("");
   const [retry, setRetry] = useState(0);
+  const [voice, setVoice] = useState<VoiceState["state"]>("idle");
+  const settingsRef = useRef<Settings | null>(null);
+  const holdingMic = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const hideTimer = useRef<number | undefined>(undefined);
   const bubbleRef = useRef<HTMLDivElement>(null);
@@ -30,6 +36,22 @@ export default function Pet() {
 
   useEffect(() => {
     invoke<{ base: string; manifest: GifManifest }>("get_gif_manifest").then(setGifs).catch(console.error);
+    invoke<Settings>("get_settings")
+      .then((s) => (settingsRef.current = s))
+      .catch(console.error);
+    const unlisten = [
+      listen<Settings>("settings:changed", (e) => (settingsRef.current = e.payload)),
+      listen<VoiceState>("voice:state", (e) => {
+        setVoice(e.payload.state);
+        if (e.payload.state === "listening") stopSpeaking();
+        if (e.payload.state === "error" && e.payload.error) {
+          window.clearTimeout(hideTimer.current);
+          setBubble({ kind: "reply", text: `🎤 ${e.payload.error}` });
+          hideTimer.current = window.setTimeout(() => setBubble(null), 6000);
+        }
+      }),
+    ];
+    return () => unlisten.forEach((u) => u.then((f) => f()));
   }, []);
 
   // WebSocket with auto-reconnect
@@ -54,6 +76,8 @@ export default function Pet() {
         setBubble({ kind: "reply", text });
         window.clearTimeout(hideTimer.current);
         hideTimer.current = window.setTimeout(() => setBubble(null), bubbleHoldMs(text));
+        const s = settingsRef.current;
+        if (s?.speakReplies) speak(text, s);
       }
     };
 
@@ -156,6 +180,24 @@ export default function Pet() {
           />
         )}
         <div className="controls">
+          <button
+            title="Hold to talk"
+            className={voice === "listening" ? "on" : ""}
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              holdingMic.current = true;
+              invoke("voice_start").catch(() => {
+                /* shown through voice:state */
+              });
+            }}
+            onPointerUp={() => {
+              if (!holdingMic.current) return;
+              holdingMic.current = false;
+              invoke("voice_stop").catch(console.error);
+            }}
+          >
+            🎤
+          </button>
           <button title="Chat" onClick={() => setChatOpen((o) => !o)}>
             💬
           </button>
@@ -164,6 +206,8 @@ export default function Pet() {
           </button>
         </div>
         {!connected && <span className="offline" title="Not connected to the companion app" />}
+        {voice === "listening" && <span className="listening" title="Listening" />}
+        {voice === "transcribing" && <span className="listening busy" title="Working out what you said" />}
       </div>
     </div>
   );
