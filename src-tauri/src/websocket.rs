@@ -33,6 +33,7 @@ pub async fn start_server(
         println!("New client connected from: {}", client_addr);
         let app_handle = app_handle.clone();
         let mut rx = broadcast_tx.subscribe();
+        let broadcast_tx = broadcast_tx.clone();
 
         tokio::spawn(async move {
             let ws_stream = match tokio_tungstenite::accept_async(stream).await {

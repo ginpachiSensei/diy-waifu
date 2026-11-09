@@ -1,5 +1,6 @@
 mod monitor;
 mod ollama;
+mod phone;
 mod websocket;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,6 +75,13 @@ async fn set_paused(
     Ok(())
 }
 
+/// URL to open on a phone on the same Wi-Fi to use it as the companion's body.
+#[tauri::command]
+fn get_phone_url() -> Result<String, String> {
+    let ip = phone::lan_ip().ok_or("Couldn't find this PC's network address")?;
+    Ok(format!("http://{}:{}/", ip, phone::PHONE_PORT))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let (broadcast_tx, _) = broadcast::channel::<String>(16);
@@ -95,7 +103,8 @@ pub fn run() {
             install_model,
             uninstall_model,
             check_model_status,
-            set_paused
+            set_paused,
+            get_phone_url
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -107,6 +116,12 @@ pub fn run() {
                     websocket::start_server(ws_handle, "0.0.0.0".to_string(), 8080, ws_tx).await
                 {
                     eprintln!("WebSocket server error: {}", e);
+                }
+            });
+
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = phone::start_server("0.0.0.0".to_string(), phone::PHONE_PORT).await {
+                    eprintln!("Phone page server error: {}", e);
                 }
             });
 

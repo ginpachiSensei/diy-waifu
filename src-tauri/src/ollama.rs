@@ -200,17 +200,39 @@ pub async fn chat(user_text: &str, model: &str) -> Result<(String, String), Stri
     Ok((text, emotion))
 }
 
+const EMOTIONS: &[&str] = &["happy", "sad", "thinking", "excited", "neutral"];
+
+// Small models don't always follow the exact "[emotion: x]" format, so accept the last
+// bracketed tag at the end of the reply, with or without the "emotion:" prefix.
 fn extract_emotion(raw: &str) -> (String, String) {
-    if let Some(start) = raw.rfind("[emotion:") {
-        let tag_part = &raw[start..];
-        let emotion = tag_part
-            .trim_start_matches("[emotion:")
-            .trim_end_matches(']')
-            .trim()
-            .to_lowercase();
-        let text = raw[..start].trim().to_string();
-        (text, emotion)
-    } else {
-        (raw.trim().to_string(), "neutral".to_string())
+    let trimmed = raw.trim();
+    if trimmed.ends_with(']') {
+        if let Some(start) = trimmed.rfind('[') {
+            let tag = trimmed[start + 1..trimmed.len() - 1].trim().to_lowercase();
+            let tag = tag.strip_prefix("emotion:").unwrap_or(&tag).trim();
+            if let Some(emotion) = EMOTIONS.iter().find(|e| tag == **e) {
+                return (trimmed[..start].trim().to_string(), emotion.to_string());
+            }
+        }
+    }
+    (trimmed.to_string(), "neutral".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_emotion;
+
+    #[test]
+    fn parses_emotion_tag_variants() {
+        let cases = [
+            ("Hi there!\n[emotion: happy]", "Hi there!", "happy"),
+            ("Hi there! [happy]", "Hi there!", "happy"),
+            ("Hmm... [Emotion:Thinking]", "Hmm...", "thinking"),
+            ("No tag here", "No tag here", "neutral"),
+            ("Unknown [angry]", "Unknown [angry]", "neutral"),
+        ];
+        for (raw, text, emotion) in cases {
+            assert_eq!(extract_emotion(raw), (text.to_string(), emotion.to_string()), "{raw}");
+        }
     }
 }

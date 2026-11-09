@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import reactLogo from "./assets/react.svg";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
@@ -12,14 +11,17 @@ interface EspData {
 type ModelStatus = "not_installed" | "installing" | "installed" | "uninstalling";
 
 function App() {
-  // --- Boilerplate State ---
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  // --- Chat State ---
+  const [chatInput, setChatInput] = useState("");
+  const [chatLog, setChatLog] = useState<{ from: "you" | "companion"; text: string }[]>([]);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
 
   // --- WebSocket State ---
   const [serverStatus, setServerStatus] = useState<string>("starting...");
   const [lastMessage, setLastMessage] = useState<EspData | null>(null);
   const [clients, setClients] = useState<string[]>([]);
+  const [phoneUrl, setPhoneUrl] = useState<string | null>(null);
 
   // --- Model/Companion State ---
   const [modelStatus, setModelStatus] = useState<ModelStatus>("not_installed");
@@ -55,6 +57,8 @@ function App() {
         setModelStatus(installed ? "installed" : "not_installed");
       })
       .catch(console.error);
+
+    invoke<string>("get_phone_url").then(setPhoneUrl).catch(console.error);
 
     // Cleanup listeners on unmount
     return () => {
@@ -98,8 +102,21 @@ function App() {
     }
   }
 
-  async function greet() {
-    setGreetMsg(await invoke("greet", { name }));
+  // The reply also goes out over the WebSocket, so the ESP32 shows it at the same time
+  async function sendChat() {
+    const text = chatInput.trim();
+    if (!text || sending) return;
+    setChatInput("");
+    setChatError(null);
+    setChatLog((prev) => [...prev, { from: "you", text }]);
+    setSending(true);
+    try {
+      const reply = await invoke<string>("send_chat_message", { text });
+      setChatLog((prev) => [...prev, { from: "companion", text: reply }]);
+    } catch (e) {
+      setChatError(String(e));
+    }
+    setSending(false);
   }
 
   return (
@@ -166,16 +183,26 @@ function App() {
           </span>
         </p>
         <p>
-          Address: <code>ws://127.0.0.1:8080</code>
+          Address: <code>ws://&lt;this PC&gt;:8080</code> (Wokwi: <code>ws://host.wokwi.internal:8080</code>)
         </p>
         <p>
           Connected Clients: <strong>{clients.length}</strong>
         </p>
       </div>
 
+      {/* Phone body */}
+      <div className="status-panel">
+        <h2>Phone Body</h2>
+        <p>
+          Open this on an Android phone on the same Wi-Fi:{" "}
+          {phoneUrl ? <code>{phoneUrl}</code> : <span className="placeholder">finding address...</span>}
+        </p>
+        <p className="placeholder">Works alongside the ESP32. Every connected body shows every reply.</p>
+      </div>
+
       {/* Latest ESP32 Message */}
       <div className="status-panel">
-        <h2>Latest ESP32 Message</h2>
+        <h2>Latest Body Message</h2>
         {lastMessage ? (
           <div className="message-display">
             {lastMessage.emotion && (
@@ -190,39 +217,39 @@ function App() {
             )}
           </div>
         ) : (
-          <p className="placeholder">Waiting for messages from ESP32...</p>
+          <p className="placeholder">Waiting for messages from the ESP32 or phone...</p>
         )}
       </div>
 
-      {/* Boilerplate Vite/Tauri/React links */}
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+      {/* Chat */}
+      <div className="status-panel">
+        <h2>Chat</h2>
+        {chatLog.length === 0 && <p className="placeholder">Say hi — replies also show on the ESP32 and phone screens.</p>}
+        {chatLog.map((m, i) => (
+          <p key={i}>
+            <strong>{m.from === "you" ? "You" : "Companion"}:</strong> {m.text}
+          </p>
+        ))}
+        {sending && <p className="placeholder">Thinking...</p>}
+        {chatError && <p style={{ color: "#f44336" }}>{chatError}</p>}
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            sendChat();
+          }}
+        >
+          <input
+            value={chatInput}
+            onChange={(e) => setChatInput(e.currentTarget.value)}
+            placeholder="Type a message..."
+            disabled={sending}
+          />
+          <button type="submit" disabled={sending || !chatInput.trim()}>
+            Send
+          </button>
+        </form>
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
     </main>
   );
 }

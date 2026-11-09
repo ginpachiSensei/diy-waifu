@@ -26,3 +26,6 @@ dist-ssr
 # bineries
 /src-tauri/binaries
 /lib
+
+# ESP32 build output
+esp32/.pio

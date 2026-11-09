@@ -1,3 +1,0 @@
-Adafruit ILI9341
-Adafruit GFX Library
-AnimatedGIF
