@@ -15,7 +15,7 @@ export default function BodiesTab() {
 
     const unlisten = [
       listen<string>("ws:server_status", (e) => setServerStatus(e.payload)),
-      listen<string>("ws:client_connected", (e) => setClients((c) => [...c, e.payload])),
+      listen<string>("ws:client_connected", (e) => setClients((c) => (c.includes(e.payload) ? c : [...c, e.payload]))),
       listen<string>("ws:client_disconnected", (e) => setClients((c) => c.filter((x) => x !== e.payload))),
     ];
     return () => unlisten.forEach((u) => u.then((f) => f()));

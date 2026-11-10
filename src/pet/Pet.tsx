@@ -118,6 +118,34 @@ export default function Pet() {
     };
   }, [avatar]);
 
+  // Tell Rust where the visible parts are, so clicks elsewhere in this
+  // see-through window reach the app behind it (desktop::pass_through_loop)
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    let last = "";
+    const report = () => {
+      const rects = [...root.querySelectorAll(".figure img, .figure .controls, .bubble, .quick-chat")]
+        .map((el) => el.getBoundingClientRect())
+        .filter((r) => r.width > 0 && r.height > 0)
+        .map((r) => ({ x: r.x, y: r.y, w: r.width, h: r.height }));
+      const key = JSON.stringify(rects);
+      if (key === last) return;
+      last = key;
+      invoke("set_pet_hit_rects", { rects }).catch(console.error);
+    };
+    const observer = new ResizeObserver(report);
+    root.querySelectorAll("*").forEach((el) => observer.observe(el));
+    report();
+    // Layout changes with the bubble and chat box; also catch late image loads
+    const timer = window.setInterval(report, 1000);
+    return () => {
+      observer.disconnect();
+      window.clearInterval(timer);
+    };
+  }, [bubble, chatOpen, gifs, connected]);
+
   // Keep the newest streamed text in view
   useEffect(() => {
     const el = bubbleRef.current;
@@ -148,7 +176,7 @@ export default function Pet() {
   const gifSrc = gifs && gifName ? `${gifs.base}${gifName}${retry ? `?r=${retry}` : ""}` : null;
 
   return (
-    <div className="pet">
+    <div className="pet" ref={rootRef}>
       {bubble && (
         <div
           className={`bubble ${bubble.kind}`}

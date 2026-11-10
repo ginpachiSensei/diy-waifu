@@ -225,6 +225,12 @@ fn set_pet_click_through(app: tauri::AppHandle, on: bool) -> Result<(), String> 
     desktop::set_click_through(&app, on)
 }
 
+/// The pet page reports where its visible parts are (see desktop::pass_through_loop)
+#[tauri::command]
+fn set_pet_hit_rects(app: tauri::AppHandle, rects: Vec<desktop::HitRect>) {
+    desktop::set_hit_rects(&app, rects);
+}
+
 #[tauri::command]
 fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     let launcher = app.autolaunch();
@@ -565,6 +571,7 @@ pub fn run() {
             get_desktop_state,
             set_pet_visible,
             set_pet_click_through,
+            set_pet_hit_rects,
             set_autostart,
             open_panel,
             get_gif_manifest,
@@ -642,6 +649,7 @@ pub fn run() {
 
             tauri::async_runtime::spawn(activity::run(app_handle.clone()));
             tauri::async_runtime::spawn(proactive::run(app_handle.clone()));
+            tauri::async_runtime::spawn(desktop::pass_through_loop(app_handle.clone()));
             tauri::async_runtime::spawn(voice::idle_reaper(app_handle.clone()));
             voice::register_shortcut(&app_handle);
 

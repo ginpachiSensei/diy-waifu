@@ -6,6 +6,7 @@ use crate::db::Db;
 use crate::settings::Settings;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Wry};
@@ -23,6 +24,25 @@ pub struct PetState {
     click_through: AtomicBool,
     /// Bumped on every move, so only the last move of a drag gets saved
     move_gen: AtomicU64,
+    /// Where the pet's visible parts are (GIF, bubble, chat box), reported by the page
+    hit_rects: Mutex<Vec<HitRect>>,
+    /// Clicks are currently passing through (cursor over a see-through part)
+    passing: AtomicBool,
+}
+
+/// A rectangle in CSS pixels inside the pet window
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct HitRect {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+impl HitRect {
+    fn contains(&self, x: f64, y: f64) -> bool {
+        x >= self.x && y >= self.y && x < self.x + self.w && y < self.y + self.h
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -77,10 +97,47 @@ pub fn click_through(app: &AppHandle) -> bool {
 pub fn set_click_through(app: &AppHandle, on: bool) -> Result<(), String> {
     let w = app.get_webview_window("pet").ok_or("Pet window is missing")?;
     w.set_ignore_cursor_events(on).map_err(|e| e.to_string())?;
-    app.state::<PetState>().click_through.store(on, Ordering::Relaxed);
+    let state = app.state::<PetState>();
+    state.click_through.store(on, Ordering::Relaxed);
+    state.passing.store(on, Ordering::Relaxed);
     app.emit("pet:click_through", on).ok();
     sync_tray(app);
     Ok(())
+}
+
+pub fn set_hit_rects(app: &AppHandle, rects: Vec<HitRect>) {
+    *app.state::<PetState>().hit_rects.lock().unwrap() = rects;
+}
+
+/// The pet window is a see-through rectangle, but only the GIF, bubble and
+/// chat box should catch clicks. Windows has no per-pixel hit testing for a
+/// transparent webview, so this watches the cursor and lets clicks through
+/// (`set_ignore_cursor_events`) whenever it isn't over one of the visible parts.
+pub async fn pass_through_loop(app: AppHandle) {
+    let state = app.state::<PetState>();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if state.click_through.load(Ordering::Relaxed) {
+            continue; // click-through mode: everything passes already
+        }
+        let Some(w) = app.get_webview_window("pet") else {
+            return;
+        };
+        if !w.is_visible().unwrap_or(false) {
+            continue;
+        }
+        let (Ok(cursor), Ok(origin), Ok(scale)) = (app.cursor_position(), w.inner_position(), w.scale_factor()) else {
+            continue;
+        };
+        let x = (cursor.x - origin.x as f64) / scale;
+        let y = (cursor.y - origin.y as f64) / scale;
+        let rects = state.hit_rects.lock().unwrap().clone();
+        // Until the page reports its layout, keep the whole window clickable
+        let pass = !rects.is_empty() && !rects.iter().any(|r| r.contains(x, y));
+        if pass != state.passing.load(Ordering::Relaxed) && w.set_ignore_cursor_events(pass).is_ok() {
+            state.passing.store(pass, Ordering::Relaxed);
+        }
+    }
 }
 
 /// Puts the pet where it was last left, or bottom-right of the main screen if
@@ -224,3 +281,4 @@ pub fn sync_tray(app: &AppHandle) {
     items.click_through.set_checked(click_through(app)).ok();
     items.pause.set_checked(crate::pause::get(app).manual).ok();
 }
+
