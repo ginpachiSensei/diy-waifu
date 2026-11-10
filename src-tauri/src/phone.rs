@@ -24,6 +24,11 @@ const FILES: &[(&str, &str, &[u8])] = &[
     ("/avatar.js", "text/javascript; charset=utf-8", include_bytes!("../../phone/avatar.js")),
 ];
 
+/// A file from the repo's gifs/ folder.
+pub fn gif_bytes(name: &str) -> Option<&'static [u8]> {
+    GIFS.get_file(name).map(|f| f.contents())
+}
+
 /// The GIF manifest, for the desktop pet.
 pub fn gif_manifest() -> &'static str {
     GIFS.get_file("manifest.json")
@@ -87,8 +92,19 @@ async fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     let target = parts.next().unwrap_or("/");
     let path = target.split(['?', '#']).next().unwrap_or("/");
 
+    // ESP32 copies of the GIFs are made on demand (see esp32.rs)
+    let esp32: Option<std::sync::Arc<Vec<u8>>> = if path == "/esp32/manifest.json" {
+        Some(std::sync::Arc::new(crate::esp32::manifest().await.to_string().into_bytes()))
+    } else if let Some(name) = path.strip_prefix("/esp32/gifs/") {
+        crate::esp32::gif(name).await
+    } else {
+        None
+    };
+
     let (status, content_type, body): (&str, &str, &[u8]) = if method != "GET" && method != "HEAD" {
         ("405 Method Not Allowed", "text/plain", b"Method not allowed")
+    } else if let Some(data) = &esp32 {
+        ("200 OK", content_type(path), data.as_slice())
     } else {
         match lookup(path) {
             Some((ct, bytes)) => ("200 OK", ct, bytes),
@@ -157,5 +173,9 @@ mod tests {
         assert!(get(port, "/avatar.js").await.starts_with("HTTP/1.1 200 OK"));
         assert!(get(port, "/gifs/../../Cargo.toml").await.starts_with("HTTP/1.1 404"));
         assert!(get(port, "/../Cargo.toml").await.starts_with("HTTP/1.1 404"));
+        let m = get(port, "/esp32/manifest.json").await;
+        assert!(m.contains("\"files\"") && m.contains("mai-san-wave.gif"), "{m}");
+        assert!(get(port, "/esp32/gifs/mai-san-wave.gif").await.contains("image/gif"));
+        assert!(get(port, "/esp32/gifs/nope.gif").await.starts_with("HTTP/1.1 404"));
     }
 }
