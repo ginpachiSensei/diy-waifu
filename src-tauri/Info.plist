@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- macOS asks for the microphone with this text the first time push-to-talk is used -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Push-to-talk records your voice and turns it into text on this computer.</string>
+</dict>
+</plist>
