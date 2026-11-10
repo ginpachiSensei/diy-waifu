@@ -5,8 +5,8 @@ It's a plain HTML/JS page with no build step. The Tauri app compiles these files
 
 ## Use it
 
-1. Run the app (`npm run tauri:dev`). The **Phone Body** panel shows a URL like `http://192.168.1.20:8081/`.
-2. Open that URL in Chrome on the phone. The phone must be on the same Wi-Fi as the PC.
+1. Run the app (`npm run tauri:dev`). The **Bodies** tab shows a QR code and a link like `http://192.168.1.20:8081/?token=ABCD2345`.
+2. Scan the QR code (or open the link) in Chrome on the phone. The phone must be on the same Wi-Fi as the PC. The `token` is the pairing code: the page remembers it, so the plain address works afterwards. If you make a new code in the app, scan again.
 3. Tap ⛶ for fullscreen. In fullscreen the bottom bar hides until you tap the screen.
 
 The first time, Windows Firewall may ask to allow `diy-waifu`. Allow it on **private networks**. If it never asked, open inbound TCP 8080 and 8081.

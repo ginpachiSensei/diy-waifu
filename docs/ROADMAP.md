@@ -315,8 +315,32 @@ The model decides when to look something up, using Ollama tool calling. `qwen2.5
 | M6 "talks" | 7 | PC voice in and out |
 | M7 "polished" | 8 | Real ESP32, security, cross-platform, CI |
 
-**Status:**
-- **M1** is done (steps 0.1–0.4, 1.1–1.5, 1.7). Step 1.6 (optional GPU runner) is still to do.
+**Status:** everything is built except the avatar art (4.6), which is yours. Things that need real hardware or other OSes are written but untested there (noted below).
+- **M7** is done (8.1–8.6):
+  - **8.1 ESP32 on real hardware:**
+    - A WiFiManager setup hotspot `Companion-Setup` asks for Wi-Fi, the pairing code and an optional PC address.
+    - The PC advertises `_companion._tcp` / `diy-waifu.local` over mDNS.
+    - Hold BOOT 3s to reset. The `wokwi` env keeps the simulator setup.
+    - Builds; not run on a board yet.
+  - **8.2 Pairing code:** for every WebSocket client that isn't on this PC, shown in the Bodies tab with a QR code. A new code kicks the others; public addresses are refused.
+  - **8.3 Per-body info:** was already done through `hello`.
+  - **8.4 GIFs from the PC:**
+    - The ESP32 downloads `/esp32/gifs/*` (resized by the app) into LittleFS and follows the same avatar states as the pet.
+    - This also covers 4.7: new art reaches the ESP32 without a reflash.
+  - **8.5 macOS/Linux:**
+    - `setup-ollama.cjs` handles each OS's archive (pinned, checksummed).
+    - The runner path goes through `tauri.<os>.conf.json` plus the sidecar's working directory.
+    - whisper-server is taken from PATH, and there's a macOS mic permission.
+    - Compiled by CI only.
+  - **8.6 CI:** GitHub Actions builds the frontend and runs clippy and tests on Windows, Linux and macOS.
+- **Leftovers, now done:**
+  - 1.6 `npm run setup:ollama:gpu` (Vulkan).
+  - 9.5 "ask me first" yes/no in the panel, pet and phone.
+  - 7.2 Piper voices, downloaded from the Voice tab.
+  - 7.3 Hands-free wake phrase (energy-based voice detection plus whisper, instead of openWakeWord).
+  - Pet clicks pass through its see-through area.
+  - `monitor.rs` folded into `activity.rs`.
+- **M1** is done (0.1–0.4, 1.1–1.7).
 - **M2** is done (2.1–2.6, 4.1–4.5). The pet is a WebSocket body. The state machine is shared through `phone/avatar.js`.
 - **M6** is done for 7.1, plus 7.2 using Windows voices:
   - **Speech-to-text:** a pinned whisper.cpp server (`b5454`) running as a side process, started when first used. Models are downloaded from the Voice tab.
