@@ -3,7 +3,6 @@ mod ask;
 mod companion;
 mod db;
 mod desktop;
-mod monitor;
 mod ollama;
 mod memory;
 mod pairing;
@@ -653,10 +652,6 @@ pub fn run() {
             tauri::async_runtime::spawn(voice::idle_reaper(app_handle.clone()));
             voice::register_shortcut(&app_handle);
 
-            let monitor_handle = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                monitor::run_monitor_loop(monitor_handle).await;
-            });
 
             Ok(())
         })

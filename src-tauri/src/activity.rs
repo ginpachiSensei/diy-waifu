@@ -343,6 +343,31 @@ fn broadcast_state(app: &tauri::AppHandle, state: &str) {
 // The loop
 // ---------------------------------------------------------------------------
 
+/// The heavy-app check lists every process, so it runs every this many ticks (~6s)
+const HEAVY_EVERY: u32 = 3;
+
+/// The first heavy app in `running` (process names), if any.
+fn find_heavy(running: impl IntoIterator<Item = String>, heavy: &[String]) -> Option<&str> {
+    running.into_iter().find_map(|name| {
+        let name = name.to_lowercase();
+        heavy.iter().find(|h| **h == name).map(String::as_str)
+    })
+}
+
+/// Auto-pauses while a heavy app (settings.heavy_apps) runs, so the model's RAM
+/// and CPU go to that app instead. Runs whether or not screen awareness is on.
+fn check_heavy_apps(app: &tauri::AppHandle, sys: &mut System, settings: &Settings) {
+    let reason = if settings.auto_pause && !settings.heavy_apps.is_empty() {
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+        let names = sys.processes().values().map(|p| p.name().to_string_lossy().into_owned());
+        find_heavy(names, &settings.heavy_apps).map(|a| format!("{a} is running"))
+    } else {
+        None
+    };
+    // No-op unless it changed
+    crate::pause::set_auto(app, reason);
+}
+
 struct Session {
     id: i64,
     app: String,
@@ -353,6 +378,8 @@ struct Session {
 pub async fn run(app: tauri::AppHandle) {
     let own_pid = std::process::id();
     let mut sys = System::new();
+    let mut heavy_sys = System::new();
+    let mut tick: u32 = 0;
     let mut last_window: Option<Window> = None;
     let mut session: Option<Session> = None;
     let db = app.state::<Db>();
@@ -364,6 +391,10 @@ pub async fn run(app: tauri::AppHandle) {
     loop {
         tokio::time::sleep(POLL).await;
         let settings = Settings::load(&db);
+        if tick.is_multiple_of(HEAVY_EVERY) {
+            check_heavy_apps(&app, &mut heavy_sys, &settings);
+        }
+        tick = tick.wrapping_add(1);
         let prev = app.state::<AppState>().activity.lock().unwrap().clone();
         let now = now_millis();
 
@@ -463,6 +494,14 @@ pub async fn run(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matches_heavy_process_names_case_insensitively() {
+        let heavy = vec!["blender.exe".to_string()];
+        let running = ["explorer.exe", "Blender.exe"].map(String::from);
+        assert_eq!(find_heavy(running, &heavy), Some("blender.exe"));
+        assert_eq!(find_heavy(["code.exe".to_string()], &heavy), None);
+    }
 
     fn win(app: &str, title: &str, path: &str) -> Window {
         Window {
