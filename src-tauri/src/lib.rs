@@ -3,6 +3,7 @@ mod ask;
 mod companion;
 mod db;
 mod desktop;
+mod esp32;
 mod ollama;
 mod memory;
 mod pairing;
@@ -605,6 +606,7 @@ pub fn run() {
             log::info!("Database: {}", db_path.display());
             app.manage(Db::open(&db_path)?);
             app.manage(pairing::Pairing::load(&app.state::<Db>()));
+            app.manage(esp32::advertise(8080, phone::PHONE_PORT));
             // Windows are `create: false` in tauri.conf.json and made here, after
             // the state above is managed. Otherwise their pages can call commands
             // before the DB exists ("state not managed for field `db`").
