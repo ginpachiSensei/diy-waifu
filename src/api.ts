@@ -47,6 +47,8 @@ export interface Settings {
   ttsVoice: string;
   ttsRate: number;
   ttsPitch: number;
+  ttsEngine: "windows" | "piper";
+  piperVoice: string;
 }
 
 export interface VoiceModel {
@@ -180,4 +182,10 @@ export interface Pairing {
   lanIp: string | null;
   phoneUrl: string | null;
   qrSvg: string | null;
+}
+
+export interface PiperStatus {
+  supported: boolean;
+  engineReady: boolean;
+  voices: { id: string; sizeMb: number; note: string; downloaded: boolean }[];
 }

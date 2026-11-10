@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Settings, VoiceProgress, VoiceState, VoiceStatus, errorText } from "../api";
-import { canSpeak, loadVoices, speak } from "../speech";
+import { PiperStatus, Settings, VoiceProgress, VoiceState, VoiceStatus, errorText } from "../api";
+import { canSpeak, loadVoices, speak, speakPiper } from "../speech";
 
 interface Props {
   settings: Settings | null;
@@ -25,8 +25,11 @@ export default function VoiceTab({ settings, onSaved }: Props) {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [heard, setHeard] = useState<string | null>(null);
 
+  const [piper, setPiper] = useState<PiperStatus | null>(null);
+
   const refresh = useCallback(() => {
     invoke<VoiceStatus>("voice_status").then(setStatus).catch(console.error);
+    invoke<PiperStatus>("piper_status").then(setPiper).catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -79,6 +82,50 @@ export default function VoiceTab({ settings, onSaved }: Props) {
       setMessage({ ok: false, text: errorText(e) });
     }
     refresh();
+  }
+
+  // null = the Piper engine, else a voice id
+  async function getPiper(id: string | null) {
+    setDownloading(id ?? "piper");
+    setProgress(null);
+    setMessage(null);
+    try {
+      if (id === null) await invoke("download_piper_engine");
+      else {
+        if (!piper?.engineReady) await invoke("download_piper_engine");
+        setProgress(null);
+        await invoke("download_piper_voice", { id });
+        // First voice: start using it
+        if (!piper?.voices.some((v) => v.downloaded)) await save({ piperVoice: id });
+      }
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    }
+    setDownloading(null);
+    refresh();
+  }
+
+  async function removePiperVoice(id: string) {
+    try {
+      await invoke("delete_piper_voice", { id });
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    }
+    refresh();
+  }
+
+  async function test() {
+    if (!settings) return;
+    const line = `Hi! I'm ${settings.companionName}. Does this voice sound okay?`;
+    if (settings.ttsEngine === "piper") {
+      try {
+        await speakPiper(line);
+      } catch (e) {
+        setMessage({ ok: false, text: errorText(e) });
+      }
+    } else {
+      speak(line, settings);
+    }
   }
 
   const selected = status?.models.find((m) => m.id === settings.whisperModel);
@@ -168,64 +215,120 @@ export default function VoiceTab({ settings, onSaved }: Props) {
 
       <section>
         <h3>Hear it talk</h3>
-        {!canSpeak ? (
-          <p className="muted">Voices aren't available in this window.</p>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={settings.speakReplies}
+            onChange={(e) => save({ speakReplies: e.currentTarget.checked })}
+          />
+          Read replies aloud from the pet
+        </label>
+        <div className="row">
+          <label className="inline">
+            Voices
+            <select
+              value={settings.ttsEngine}
+              onChange={(e) => save({ ttsEngine: e.currentTarget.value as Settings["ttsEngine"] })}
+            >
+              <option value="windows">Windows voices</option>
+              <option value="piper" disabled={!piper?.supported}>
+                Natural voices (Piper, offline)
+              </option>
+            </select>
+          </label>
+          <label className="inline">
+            Speed
+            <input
+              type="range"
+              min={0.5}
+              max={2}
+              step={0.1}
+              value={settings.ttsRate}
+              onChange={(e) => save({ ttsRate: Number(e.currentTarget.value) })}
+            />
+            {settings.ttsRate.toFixed(1)}×
+          </label>
+          <button onClick={test}>Test</button>
+        </div>
+
+        {settings.ttsEngine === "windows" ? (
+          !canSpeak ? (
+            <p className="muted">Voices aren't available in this window.</p>
+          ) : (
+            <>
+              <div className="row">
+                <label className="inline">
+                  Voice
+                  <select value={settings.ttsVoice} onChange={(e) => save({ ttsVoice: e.currentTarget.value })}>
+                    <option value="">Windows default</option>
+                    {voices.map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.name} ({v.lang})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="inline">
+                  Pitch
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={2}
+                    step={0.1}
+                    value={settings.ttsPitch}
+                    onChange={(e) => save({ ttsPitch: Number(e.currentTarget.value) })}
+                  />
+                  {settings.ttsPitch.toFixed(1)}
+                </label>
+              </div>
+              <p className="hint">
+                These are the voices installed in Windows (Settings → Time &amp; language → Speech adds more).
+              </p>
+            </>
+          )
         ) : (
           <>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={settings.speakReplies}
-                onChange={(e) => save({ speakReplies: e.currentTarget.checked })}
-              />
-              Read replies aloud from the pet
-            </label>
-            <div className="row">
-              <label className="inline">
-                Voice
-                <select value={settings.ttsVoice} onChange={(e) => save({ ttsVoice: e.currentTarget.value })}>
-                  <option value="">Windows default</option>
-                  {voices.map((v) => (
-                    <option key={v.name} value={v.name}>
-                      {v.name} ({v.lang})
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="row">
-              <label className="inline">
-                Speed
-                <input
-                  type="range"
-                  min={0.5}
-                  max={2}
-                  step={0.1}
-                  value={settings.ttsRate}
-                  onChange={(e) => save({ ttsRate: Number(e.currentTarget.value) })}
-                />
-                {settings.ttsRate.toFixed(1)}×
-              </label>
-              <label className="inline">
-                Pitch
-                <input
-                  type="range"
-                  min={0.5}
-                  max={2}
-                  step={0.1}
-                  value={settings.ttsPitch}
-                  onChange={(e) => save({ ttsPitch: Number(e.currentTarget.value) })}
-                />
-                {settings.ttsPitch.toFixed(1)}
-              </label>
-              <button onClick={() => speak(`Hi! I'm ${settings.companionName}. Does this voice sound okay?`, settings)}>
-                Test
-              </button>
-            </div>
-            <p className="hint">
-              These are the voices installed in Windows (Settings → Time &amp; language → Speech adds more). Nicer
-              offline voices (Piper) can come later.
-            </p>
+            {!piper?.engineReady && (
+              <div className="card">
+                <span>Piper (about 22 MB) runs on this PC; nothing is sent online.</span>
+                <div className="row">
+                  <button className="primary" onClick={() => getPiper(null)} disabled={!!downloading}>
+                    {downloading === "piper" ? `${pct ?? 0}%` : "Download Piper"}
+                  </button>
+                </div>
+              </div>
+            )}
+            <ul className="list">
+              {piper?.voices.map((v) => (
+                <li key={v.id}>
+                  <span className="grow">
+                    <span>
+                      <code>{v.id}</code> <span className="muted">{v.sizeMb} MB</span>
+                      {v.id === settings.piperVoice && v.downloaded && <span className="tag">in use</span>}
+                      <br />
+                      <span className="hint">{v.note}</span>
+                    </span>
+                  </span>
+                  <span className="row">
+                    {v.downloaded ? (
+                      <>
+                        {v.id !== settings.piperVoice && (
+                          <button onClick={() => save({ piperVoice: v.id })}>Use</button>
+                        )}
+                        <button onClick={() => removePiperVoice(v.id)}>Delete</button>
+                      </>
+                    ) : (
+                      <button onClick={() => getPiper(v.id)} disabled={!!downloading}>
+                        {downloading === v.id ? `${pct ?? 0}%` : "Download"}
+                      </button>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {piper && !piper.voices.some((v) => v.id === settings.piperVoice && v.downloaded) && (
+              <p className="error">Download a voice to use Piper. Until then replies use a Windows voice.</p>
+            )}
           </>
         )}
       </section>

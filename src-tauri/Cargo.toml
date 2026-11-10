@@ -44,6 +44,7 @@ getrandom = "0.2"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 image = { version = "0.25", default-features = false, features = ["gif"] }
 mdns-sd = "0.13"
+sha2 = "0.10"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
