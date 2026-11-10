@@ -24,6 +24,7 @@ export default function VoiceTab({ settings, onSaved }: Props) {
   const [shortcut, setShortcut] = useState("");
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [heard, setHeard] = useState<string | null>(null);
+  const [wakeWord, setWakeWord] = useState("");
 
   const [piper, setPiper] = useState<PiperStatus | null>(null);
 
@@ -39,12 +40,16 @@ export default function VoiceTab({ settings, onSaved }: Props) {
       listen<VoiceState>("voice:state", (e) => setState(e.payload)),
       listen<VoiceProgress>("voice:progress", (e) => setProgress(e.payload)),
       listen<string>("voice:transcript", (e) => setHeard(e.payload)),
+      listen<boolean>("voice:hands_free", refresh),
     ];
     return () => unlisten.forEach((u) => u.then((f) => f()));
   }, [refresh]);
 
   useEffect(() => {
-    if (settings) setShortcut(settings.pttShortcut);
+    if (settings) {
+      setShortcut(settings.pttShortcut);
+      setWakeWord(settings.wakeWord);
+    }
   }, [settings]);
 
   if (!settings) return <p className="muted">Loading…</p>;
@@ -173,6 +178,57 @@ export default function VoiceTab({ settings, onSaved }: Props) {
           </button>
         </form>
         <p className="hint">Combinations like Ctrl+Shift+Space, Alt+Q or F8. It works in any app.</p>
+      </section>
+
+      <section>
+        <h3>Hands-free</h3>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={settings.handsFree}
+            disabled={!settings.voiceInput}
+            onChange={async (e) => {
+              await save({ handsFree: e.currentTarget.checked });
+              window.setTimeout(refresh, 2500); // it starts within a couple of seconds
+            }}
+          />
+          Listen for the wake phrase all the time: say "{status?.wakePhrase ?? "hey …"}, what's the weather?"
+        </label>
+        {settings.handsFree && (
+          <p>
+            {status?.handsFree ? (
+              <span className="ok">Listening for "{status.wakePhrase}"</span>
+            ) : (
+              <span className="muted">
+                Not listening right now (it pauses with the companion, and needs a speech model below).
+              </span>
+            )}
+          </p>
+        )}
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save({ wakeWord: wakeWord.trim() }, "Wake phrase saved.").then(refresh);
+          }}
+        >
+          <label className="inline">
+            Wake phrase
+            <input
+              value={wakeWord}
+              onChange={(e) => setWakeWord(e.currentTarget.value)}
+              placeholder={`hey ${settings.companionName}`}
+            />
+          </label>
+          <button type="submit" disabled={wakeWord.trim() === settings.wakeWord}>
+            Save
+          </button>
+        </form>
+        <p className="hint">
+          The microphone stays on and everything said nearby is turned into text on this PC to look for the phrase.
+          Anything without it is thrown away, never saved or logged. It uses some CPU while people talk. Say just the
+          phrase and it waits a few seconds for the rest.
+        </p>
       </section>
 
       <section>

@@ -4,6 +4,7 @@ mod companion;
 mod db;
 mod desktop;
 mod esp32;
+mod handsfree;
 mod ollama;
 mod memory;
 mod pairing;
@@ -407,6 +408,10 @@ struct VoiceStatus {
     models: Vec<voice::ModelInfo>,
     microphone: Option<String>,
     recording: bool,
+    /// Hands-free listening is running
+    hands_free: bool,
+    /// What it listens for
+    wake_phrase: String,
 }
 
 #[tauri::command]
@@ -415,6 +420,8 @@ fn voice_status(app: tauri::AppHandle) -> VoiceStatus {
         models: voice::list_models(&app),
         microphone: voice::input_device_name(),
         recording: voice::is_recording(&app),
+        hands_free: handsfree::is_on(&app),
+        wake_phrase: handsfree::wake_phrase(&Settings::load(&app.state::<Db>())),
     }
 }
 
@@ -573,6 +580,7 @@ pub fn run() {
         .manage(desktop::PetState::default())
         .manage(voice::VoiceState::default())
         .manage(ask::Asks::default())
+        .manage(handsfree::HandsFree::default())
         .on_window_event(|window, event| match event {
             // Closing a window only hides it; Quit is in the tray
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -690,6 +698,7 @@ pub fn run() {
             tauri::async_runtime::spawn(proactive::run(app_handle.clone()));
             tauri::async_runtime::spawn(desktop::pass_through_loop(app_handle.clone()));
             tauri::async_runtime::spawn(voice::idle_reaper(app_handle.clone()));
+            tauri::async_runtime::spawn(handsfree::run(app_handle.clone()));
             voice::register_shortcut(&app_handle);
 
 

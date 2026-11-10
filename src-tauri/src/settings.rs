@@ -70,6 +70,10 @@ pub struct Settings {
     pub whisper_model: String,
     /// Hold this to talk, e.g. "Ctrl+Shift+Space"
     pub ptt_shortcut: String,
+    /// Listen all the time for the wake phrase (see handsfree.rs)
+    pub hands_free: bool,
+    /// Empty: "hey <companion name>"
+    pub wake_word: String,
     /// Read replies aloud from the pet (with tts_engine)
     pub speak_replies: bool,
     /// Windows voice name; empty = the default voice
@@ -117,6 +121,8 @@ impl Default for Settings {
             tts_rate: 1.0,
             tts_pitch: 1.1,
             tts_engine: "windows".into(),
+            hands_free: false,
+            wake_word: String::new(),
             piper_voice: "en_US-amy-medium".into(),
         }
     }
@@ -153,6 +159,7 @@ impl Settings {
         self.ptt_shortcut = self.ptt_shortcut.trim().to_string();
         self.tts_rate = self.tts_rate.clamp(0.5, 2.0);
         self.tts_pitch = self.tts_pitch.clamp(0.5, 2.0);
+        self.wake_word = self.wake_word.trim().chars().take(40).collect();
         if self.tts_engine != "piper" {
             self.tts_engine = "windows".into();
         }
