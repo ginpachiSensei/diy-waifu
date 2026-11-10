@@ -1,138 +1,207 @@
 // Downloads the Ollama sidecar into src-tauri/binaries/.
 //
+//   node setup-ollama.cjs           CPU only (smallest bundle)
+//   node setup-ollama.cjs --gpu     also keep the Vulkan runner (any recent AMD/Intel/NVIDIA GPU;
+//                                   Windows and Linux). Same as OLLAMA_GPU=1.
+//
 // Layout produced:
 //   src-tauri/binaries/ollama-<target-triple>[.exe]   -> bundled via tauri.conf.json `externalBin`
-//   src-tauri/binaries/lib/ollama/...                 -> bundled via `resources` to <app dir>/lib/ollama
+//   src-tauri/binaries/lib/ollama/...                 -> bundled via `resources`
 //
-// Ollama looks for its model runner (llama-server + ggml libs) in lib/ollama next to its own
-// executable, so both pieces must ship together. GPU runner folders (CUDA/ROCm/Vulkan) are
-// skipped to keep the bundle small, so models run on CPU.
+// Ollama looks for its model runner (llama-server + ggml libs) in a few places, among them
+// <exe dir>/lib/ollama and <working dir>/build/lib/ollama:
+//   - Windows: Tauri puts resources next to the exe, so lib/ollama/ just works.
+//   - macOS/Linux: bundles keep resources away from the exe (Contents/Resources,
+//     /usr/lib/<app>), so this script writes tauri.<os>.conf.json mapping the runner to
+//     ollama-runtime/build/lib/ollama/, and ollama.rs starts the sidecar in ollama-runtime/.
+//
+// The release is pinned and checked against its sha256sum.txt. CUDA and ROCm folders are
+// always skipped (they're gigabytes); models run on the CPU unless --gpu keeps Vulkan.
 const fs = require('fs');
 const https = require('https');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
+
+const VERSION = 'v0.32.4';
+const RELEASE_URL = `https://github.com/ollama/ollama/releases/download/${VERSION}`;
+const GPU = process.argv.includes('--gpu') || /^(1|true|yes)$/i.test(process.env.OLLAMA_GPU || '');
 
 const platform = os.platform();
 const arch = os.arch();
 
-let targetTriple = '';
-let url = '';
-let isZip = false;
-
-// 1. Detect OS & Architecture to map to Tauri's target triple
-if (platform === 'win32' && arch === 'x64') {
-    targetTriple = 'x86_64-pc-windows-msvc';
-    url = 'https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.zip';
-    isZip = true;
-} else if (platform === 'darwin' && arch === 'arm64') {
-    targetTriple = 'aarch64-apple-darwin';
-    url = 'https://github.com/ollama/ollama/releases/latest/download/ollama-darwin';
-} else if (platform === 'darwin' && arch === 'x64') {
-    targetTriple = 'x86_64-apple-darwin';
-    url = 'https://github.com/ollama/ollama/releases/latest/download/ollama-darwin';
-} else if (platform === 'linux' && arch === 'x64') {
-    targetTriple = 'x86_64-unknown-linux-gnu';
-    url = 'https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64';
-} else if (platform === 'linux' && arch === 'arm64') {
-    targetTriple = 'aarch64-unknown-linux-gnu';
-    url = 'https://github.com/ollama/ollama/releases/latest/download/ollama-linux-arm64';
-} else {
+const TARGETS = {
+    'win32-x64': { triple: 'x86_64-pc-windows-msvc', asset: 'ollama-windows-amd64.zip' },
+    'win32-arm64': { triple: 'aarch64-pc-windows-msvc', asset: 'ollama-windows-arm64.zip' },
+    'darwin-arm64': { triple: 'aarch64-apple-darwin', asset: 'ollama-darwin.tgz' },
+    'darwin-x64': { triple: 'x86_64-apple-darwin', asset: 'ollama-darwin.tgz' },
+    'linux-x64': { triple: 'x86_64-unknown-linux-gnu', asset: 'ollama-linux-amd64.tar.zst' },
+    'linux-arm64': { triple: 'aarch64-unknown-linux-gnu', asset: 'ollama-linux-arm64.tar.zst' },
+};
+const target = TARGETS[`${platform}-${arch}`];
+if (!target) {
     console.error(`Unsupported platform/architecture: ${platform} ${arch}`);
     process.exit(1);
 }
 
 const ext = platform === 'win32' ? '.exe' : '';
-const binaryName = `ollama-${targetTriple}${ext}`;
 const binDir = path.join(__dirname, 'src-tauri', 'binaries');
-const finalPath = path.join(binDir, binaryName);
+const finalPath = path.join(binDir, `ollama-${target.triple}${ext}`);
 const runnerDir = path.join(binDir, 'lib', 'ollama');
-const runnerExe = path.join(runnerDir, `llama-server${ext}`);
-// Older versions of this script extracted the zip into the repo root and left lib/ollama there.
-const legacyRunnerDir = path.join(__dirname, 'lib', 'ollama');
+const versionFile = path.join(runnerDir, 'VERSION');
+const vulkanDir = path.join(runnerDir, 'vulkan');
 
-const isGpuDir = (name) => /^(cuda|rocm|vulkan)/i.test(name);
+const skipDir = (name) => /^(cuda|rocm|mlx)/i.test(name) || (!GPU && /^vulkan/i.test(name));
 
-// Copy the runner folder, leaving out the GPU backends
-function copyCpuRunner(srcDir, destDir) {
+function download(url, dest) {
+    return new Promise((resolve, reject) => {
+        const get = (u, redirects = 0) => {
+            https
+                .get(u, { headers: { 'User-Agent': 'diy-waifu-setup' } }, (res) => {
+                    if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects < 5) {
+                        res.resume();
+                        return get(res.headers.location, redirects + 1);
+                    }
+                    if (res.statusCode !== 200) {
+                        res.resume();
+                        return reject(new Error(`HTTP ${res.statusCode} for ${u}`));
+                    }
+                    const total = Number(res.headers['content-length']) || 0;
+                    let got = 0;
+                    let shown = -1;
+                    res.on('data', (chunk) => {
+                        got += chunk.length;
+                        const pct = total ? Math.floor((got / total) * 100) : -1;
+                        if (pct !== shown && pct % 10 === 0) {
+                            shown = pct;
+                            process.stdout.write(`   ${pct}%\r`);
+                        }
+                    });
+                    const file = fs.createWriteStream(dest);
+                    res.pipe(file);
+                    file.on('finish', () => file.close(resolve));
+                    file.on('error', reject);
+                })
+                .on('error', reject);
+        };
+        get(url);
+    });
+}
+
+function sha256(file) {
+    return new Promise((resolve, reject) => {
+        const h = crypto.createHash('sha256');
+        fs.createReadStream(file).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
+    });
+}
+
+function extract(archive, dest) {
+    fs.mkdirSync(dest, { recursive: true });
+    if (archive.endsWith('.zip')) {
+        // PowerShell directly, because Git Bash's `tar` reads C: as a remote host
+        execSync(
+            `powershell -NoProfile -Command "Expand-Archive -LiteralPath '${archive}' -DestinationPath '${dest}' -Force"`,
+            { stdio: 'inherit' }
+        );
+    } else if (archive.endsWith('.tar.zst')) {
+        try {
+            execSync(`tar --zstd -xf "${archive}" -C "${dest}"`, { stdio: 'inherit' });
+        } catch {
+            execSync(`zstd -dc "${archive}" | tar -xf - -C "${dest}"`, { stdio: 'inherit', shell: '/bin/sh' });
+        }
+    } else {
+        execSync(`tar -xzf "${archive}" -C "${dest}"`, { stdio: 'inherit' });
+    }
+}
+
+// Copies a runner folder, leaving out the GPU backends we don't ship
+function copyRunner(srcDir, destDir, exclude = new Set()) {
     fs.mkdirSync(destDir, { recursive: true });
     for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-        if (entry.isDirectory() && isGpuDir(entry.name)) continue;
+        if (exclude.has(entry.name) || (entry.isDirectory() && skipDir(entry.name))) continue;
         fs.cpSync(path.join(srcDir, entry.name), path.join(destDir, entry.name), { recursive: true });
     }
 }
 
-function downloadFile(url, dest) {
-    return new Promise((resolve, reject) => {
-        https.get(url, (response) => {
-            if (response.statusCode === 301 || response.statusCode === 302) {
-                return resolve(downloadFile(response.headers.location, dest));
-            }
-            if (response.statusCode !== 200) {
-                return reject(new Error(`Failed to download: ${response.statusCode}`));
-            }
-            const file = fs.createWriteStream(dest);
-            response.pipe(file);
-            file.on('finish', () => file.close(resolve));
-        }).on('error', (err) => {
-            fs.unlink(dest, () => reject(err));
-        });
-    });
+function findFile(dir, name) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, entry.name);
+        if (entry.isFile() && entry.name === name) return p;
+        if (entry.isDirectory()) {
+            const found = findFile(p, name);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+// macOS/Linux: point the runner resource where ollama.rs will look for it (see top)
+function writePlatformConfig() {
+    if (platform === 'win32') return;
+    const name = platform === 'darwin' ? 'tauri.macos.conf.json' : 'tauri.linux.conf.json';
+    const config = {
+        bundle: { resources: { 'binaries/lib/ollama/': 'ollama-runtime/build/lib/ollama/' } },
+    };
+    fs.writeFileSync(path.join(__dirname, 'src-tauri', name), JSON.stringify(config, null, 2) + '\n');
 }
 
 (async () => {
     try {
-        fs.mkdirSync(binDir, { recursive: true });
-        // Tauri's `resources` entry needs this folder to exist, even on platforms without a runner
-        fs.mkdirSync(runnerDir, { recursive: true });
+        fs.mkdirSync(runnerDir, { recursive: true }); // `resources` needs it to exist
+        writePlatformConfig();
 
-        const haveBinary = fs.existsSync(finalPath);
-        const haveRunner = !isZip || fs.existsSync(runnerExe);
-
-        if (haveBinary && haveRunner) {
-            console.log(`✅ Ollama sidecar already exists for ${targetTriple}`);
+        const current =
+            fs.existsSync(finalPath) && fs.existsSync(versionFile) && fs.readFileSync(versionFile, 'utf8').trim() === VERSION;
+        // Older setups had no VERSION file: accept a working runner rather than re-download 1.6 GB
+        const legacyOk = !fs.existsSync(versionFile) && fs.existsSync(finalPath) && fs.existsSync(path.join(runnerDir, `llama-server${ext}`));
+        const gpuOk = !GPU || platform === 'darwin' || fs.existsSync(vulkanDir);
+        if ((current || legacyOk) && gpuOk) {
+            console.log(`✅ Ollama sidecar ready for ${target.triple}${fs.existsSync(vulkanDir) ? ' (with Vulkan GPU runner)' : ''}`);
             return;
         }
 
-        // Reuse a leftover runner from an older setup instead of re-downloading
-        if (haveBinary && !haveRunner && fs.existsSync(path.join(legacyRunnerDir, `llama-server${ext}`))) {
-            console.log('🚚 Reusing runner from ./lib/ollama (CPU files only)...');
-            copyCpuRunner(legacyRunnerDir, runnerDir);
-            console.log('🎉 Ollama runner ready. You can delete ./lib to free disk space.');
-            return;
+        const workDir = path.join(binDir, '.download');
+        const archive = path.join(workDir, target.asset);
+        const extractDir = path.join(workDir, 'extract');
+        fs.rmSync(workDir, { recursive: true, force: true });
+        fs.mkdirSync(workDir, { recursive: true });
+
+        console.log(`📥 Downloading Ollama ${VERSION} (${target.asset}). This is large; it's done once.`);
+        await download(`${RELEASE_URL}/${target.asset}`, archive);
+        await download(`${RELEASE_URL}/sha256sum.txt`, path.join(workDir, 'sha256sum.txt'));
+        const sums = fs.readFileSync(path.join(workDir, 'sha256sum.txt'), 'utf8');
+        const line = sums.split('\n').find((l) => l.trim().endsWith(target.asset));
+        const expected = line && line.trim().split(/\s+/)[0];
+        const actual = await sha256(archive);
+        if (!expected || expected.toLowerCase() !== actual) {
+            throw new Error(`Checksum mismatch for ${target.asset} (expected ${expected}, got ${actual})`);
         }
 
-        console.log(`📥 Downloading Ollama for ${targetTriple}...`);
+        console.log('📦 Extracting...');
+        extract(archive, extractDir);
 
-        if (isZip) {
-            const workDir = path.join(binDir, '.download');
-            const zipPath = path.join(workDir, 'ollama.zip');
-            const extractDir = path.join(workDir, 'extract');
-            fs.rmSync(workDir, { recursive: true, force: true });
-            fs.mkdirSync(workDir, { recursive: true });
-
-            await downloadFile(url, zipPath);
-
-            console.log('📦 Extracting zip archive...');
-            // Use PowerShell directly to avoid Git Bash `tar` conflicts
-            execSync(
-                `powershell -NoProfile -Command "Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${extractDir}' -Force"`,
-                { stdio: 'inherit' }
-            );
-
-            console.log('🚚 Moving binary and CPU runner into src-tauri/binaries...');
-            fs.copyFileSync(path.join(extractDir, `ollama${ext}`), finalPath);
-            copyCpuRunner(path.join(extractDir, 'lib', 'ollama'), runnerDir);
-            fs.rmSync(workDir, { recursive: true, force: true });
+        const exe = findFile(extractDir, `ollama${ext}`);
+        if (!exe) throw new Error('ollama binary not found in the archive');
+        // Runner: lib/ollama on Windows/Linux; on macOS the helpers sit next to the binary
+        const libDir = path.join(extractDir, 'lib', 'ollama');
+        fs.rmSync(runnerDir, { recursive: true, force: true });
+        if (fs.existsSync(libDir)) {
+            copyRunner(libDir, runnerDir);
         } else {
-            await downloadFile(url, finalPath);
-            // On Unix systems, we must make the binary executable
-            fs.chmodSync(finalPath, 0o755);
+            copyRunner(path.dirname(exe), runnerDir, new Set([path.basename(exe)]));
         }
+        if (GPU && platform !== 'darwin' && !fs.existsSync(vulkanDir)) {
+            console.warn('⚠️  This Ollama build has no Vulkan runner; models will run on the CPU.');
+        }
+        fs.copyFileSync(exe, finalPath);
+        if (platform !== 'win32') fs.chmodSync(finalPath, 0o755);
+        fs.writeFileSync(versionFile, VERSION + '\n');
+        fs.rmSync(workDir, { recursive: true, force: true });
 
-        console.log(`🎉 Successfully prepared Ollama sidecar: ${binaryName}`);
+        console.log(`🎉 Ollama ${VERSION} ready for ${target.triple}${fs.existsSync(vulkanDir) ? ' with the Vulkan GPU runner' : ' (CPU)'}`);
     } catch (err) {
-        console.error('❌ Failed to download Ollama sidecar:', err);
+        console.error('❌ Failed to set up the Ollama sidecar:', err.message || err);
         process.exit(1);
     }
 })();
