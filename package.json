@@ -11,7 +11,8 @@
     "tauri": "tauri",
     "tauri:dev": "npm run setup:ollama && npm run setup:whisper && tauri dev",
     "tauri:build": "npm run setup:ollama && npm run setup:whisper && tauri build",
-    "setup:whisper": "node setup-whisper.cjs"
+    "setup:whisper": "node setup-whisper.cjs",
+    "setup:ollama:gpu": "node setup-ollama.cjs --gpu"
   },
   "dependencies": {
     "react": "^19.1.0",

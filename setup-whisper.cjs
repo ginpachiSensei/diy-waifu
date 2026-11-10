@@ -6,8 +6,9 @@
 //
 // The release is pinned and its SHA-256 checked, since this is code the app runs.
 // The speech model itself (~150 MB) is downloaded later from the app's Voice tab.
-// Only Windows x64 is handled for now; elsewhere this leaves a placeholder so the
-// `resources` entry still exists.
+// Only Windows x64 gets a download (whisper.cpp ships no other server builds); elsewhere
+// this leaves a placeholder so the `resources` entry exists, and voice.rs uses
+// whisper-server from PATH (e.g. brew install whisper-cpp).
 const fs = require('fs');
 const https = require('https');
 const os = require('os');
@@ -53,8 +54,8 @@ function download(url, dest) {
 async function main() {
     if (!(os.platform() === 'win32' && os.arch() === 'x64')) {
         fs.mkdirSync(outDir, { recursive: true });
-        fs.writeFileSync(path.join(outDir, 'README.txt'), 'Speech-to-text is only set up on Windows x64 for now.\n');
-        console.log('Whisper: skipped (only Windows x64 is supported for now).');
+        fs.writeFileSync(path.join(outDir, 'README.txt'), 'Only Windows x64 gets a download. Elsewhere the app uses whisper-server from PATH (brew install whisper-cpp).\n');
+        console.log('Whisper: no download for this platform; the app will use whisper-server from PATH (e.g. brew install whisper-cpp).');
         return;
     }
     if (fs.existsSync(serverExe) && fs.existsSync(versionFile) && fs.readFileSync(versionFile, 'utf8').trim() === RELEASE) {

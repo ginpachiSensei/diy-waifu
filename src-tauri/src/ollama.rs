@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
+#[cfg(not(windows))]
+use tauri::Manager as _;
 
 use crate::tools::ToolCall;
 
@@ -30,6 +32,13 @@ pub fn spawn_ollama(app_handle: &tauri::AppHandle) -> Result<CommandChild, Strin
         .sidecar("ollama")
         .map_err(|e| e.to_string())?
         .args(["serve"]);
+    // macOS/Linux bundles keep resources away from the exe, so Ollama finds its runner
+    // through <working dir>/build/lib/ollama instead (see setup-ollama.cjs)
+    #[cfg(not(windows))]
+    let sidecar = match app_handle.path().resource_dir() {
+        Ok(dir) if dir.join("ollama-runtime").is_dir() => sidecar.current_dir(dir.join("ollama-runtime")),
+        _ => sidecar,
+    };
 
     let (mut rx, child) = sidecar.spawn().map_err(|e| e.to_string())?;
 

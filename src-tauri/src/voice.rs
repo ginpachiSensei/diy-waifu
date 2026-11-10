@@ -392,10 +392,22 @@ fn server_exe(app: &AppHandle) -> Result<PathBuf, String> {
         .join("whisper")
         .join(if cfg!(windows) { "whisper-server.exe" } else { "whisper-server" });
     if p.exists() {
-        Ok(p)
-    } else {
-        Err("The speech-to-text engine isn't installed (run npm run setup:whisper)".into())
+        return Ok(p);
     }
+    // macOS/Linux: no prebuilt download, so use one from the system
+    // (`brew install whisper-cpp`, or a distro package) if it's on PATH
+    if !cfg!(windows) {
+        if let Some(found) = std::env::var_os("PATH")
+            .iter()
+            .flat_map(std::env::split_paths)
+            .map(|dir| dir.join("whisper-server"))
+            .find(|c| c.is_file())
+        {
+            return Ok(found);
+        }
+        return Err("Speech-to-text needs whisper-server: install whisper.cpp (e.g. brew install whisper-cpp)".into());
+    }
+    Err("The speech-to-text engine isn't installed (run npm run setup:whisper)".into())
 }
 
 async fn server_answers() -> bool {
