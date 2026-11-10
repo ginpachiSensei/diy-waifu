@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "binaries/lib/ollama/": "ollama-runtime/build/lib/ollama/"
+    }
+  }
+}
