@@ -62,6 +62,22 @@ export default function PersonaTab({ settings, onSaved }: Props) {
         <span className="hint">Written to the companion, e.g. "You are shy but witty and love space facts."</span>
       </label>
       <label>
+        Language
+        <select
+          value={draft.language}
+          onChange={(e) => set("language", e.currentTarget.value as Settings["language"])}
+        >
+          <option value="auto">Same as you write in</option>
+          <option value="en">English</option>
+          <option value="ja">Japanese (日本語)</option>
+          <option value="hi">Hindi (हिन्दी)</option>
+        </select>
+        <span className="hint">
+          What the companion replies in. Speech-to-text listens for it too (with a multilingual speech model). For
+          Japanese, a bigger chat model than the default replies more naturally.
+        </span>
+      </label>
+      <label>
         Reply length
         <select
           value={draft.replyLength}

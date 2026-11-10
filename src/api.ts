@@ -47,10 +47,16 @@ export interface Settings {
   ttsVoice: string;
   ttsRate: number;
   ttsPitch: number;
-  ttsEngine: "windows" | "piper";
+  ttsEngine: "windows" | "piper" | "kokoro" | "studio";
   handsFree: boolean;
   wakeWord: string;
   piperVoice: string;
+  kokoroVoice: string;
+  studioVoice: string;
+  studioStyle: string;
+  studioGpu: boolean;
+  /** Reply language; also what speech-to-text expects */
+  language: "auto" | "en" | "ja" | "hi";
 }
 
 export interface VoiceModel {
@@ -186,6 +192,23 @@ export interface Pairing {
   lanIp: string | null;
   phoneUrl: string | null;
   qrSvg: string | null;
+}
+
+export interface StudioStatus {
+  supported: boolean;
+  engineReady: boolean;
+  modelReady: boolean;
+  engineMb: number;
+  modelMb: number;
+  running: boolean;
+  voices: { id: string; note: string }[];
+}
+
+export interface KokoroStatus {
+  supported: boolean;
+  ready: boolean;
+  sizeMb: number;
+  voices: { id: string; note: string }[];
 }
 
 export interface PiperStatus {

@@ -31,17 +31,21 @@ pub const MODELS: &[(&str, &str, u32, &str)] = &[
     ("tiny.en", "ggml-tiny.en.bin", 75, "Fastest, English only, makes more mistakes"),
     ("base.en", "ggml-base.en.bin", 142, "Recommended: quick and accurate for English"),
     ("small.en", "ggml-small.en.bin", 466, "More accurate English, slower on CPU"),
-    ("base", "ggml-base.bin", 142, "Many languages (Hindi too), less accurate"),
+    ("base", "ggml-base.bin", 142, "Many languages (Hindi, Japanese), less accurate"),
+    ("small", "ggml-small.bin", 488, "Many languages, good Japanese and Hindi; slower on CPU"),
 ];
 
 fn model_file(id: &str) -> Option<&'static str> {
     MODELS.iter().find(|m| m.0 == id).map(|m| m.1)
 }
 
-/// English-only models are told the language; multilingual ones detect it
-fn language_for(id: &str) -> &'static str {
+/// English-only models are told the language; multilingual ones get the
+/// reply language if one is set, and detect it otherwise
+fn language_for<'a>(id: &str, language: &'a str) -> &'a str {
     if id.ends_with(".en") {
         "en"
+    } else if matches!(language, "en" | "ja" | "hi") {
+        language
     } else {
         "auto"
     }
@@ -515,7 +519,7 @@ pub(crate) async fn transcribe(app: &AppHandle, audio: &[f32]) -> Result<String,
         .part("file", part)
         .text("response_format", "json")
         .text("temperature", "0.0")
-        .text("language", language_for(&settings.whisper_model));
+        .text("language", language_for(&settings.whisper_model, &settings.language).to_string());
     let resp = reqwest::Client::new()
         .post(format!("http://127.0.0.1:{WHISPER_PORT}/inference"))
         .multipart(form)
@@ -609,7 +613,8 @@ mod tests {
 
     #[test]
     fn languages_follow_the_model() {
-        assert_eq!(language_for("base.en"), "en");
-        assert_eq!(language_for("base"), "auto");
+        assert_eq!(language_for("base.en", "ja"), "en");
+        assert_eq!(language_for("base", "auto"), "auto");
+        assert_eq!(language_for("small", "ja"), "ja");
     }
 }

@@ -70,6 +70,12 @@ pub fn system_prompt(s: &Settings) -> String {
     if !s.user_name.is_empty() {
         p.push_str(&format!(" The user's name is {user}."));
     }
+    p.push_str(match s.language.as_str() {
+        "ja" => "\nAlways reply in natural, casual Japanese (日本語), even when the user writes in another language.",
+        "en" => "\nAlways reply in English.",
+        "hi" => "\nAlways reply in Hindi (हिन्दी), even when the user writes in another language.",
+        _ => "\nReply in the language the user writes in.",
+    });
     p.push_str(&format!(
         "\nReply in {len}, casually, like a friend talking. No lists, no markdown, no emojis.\
          \nAt the very end of every reply, add one emotion tag in exactly this format: \

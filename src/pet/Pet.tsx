@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Settings, VoiceState } from "../api";
-import { speakReply, stopSpeaking } from "../speech";
+import { ReplySpeaker } from "../speech";
 import { createAvatar, gifFor, CompanionMessage, GifManifest } from "../../phone/avatar.js";
 
 const WS_URL = "ws://127.0.0.1:8080";
@@ -28,6 +28,15 @@ export default function Pet() {
   const [retry, setRetry] = useState(0);
   const [voice, setVoice] = useState<VoiceState["state"]>("idle");
   const settingsRef = useRef<Settings | null>(null);
+  // Speaks replies sentence by sentence; tells Rust while it talks, so hands-free
+  // can hear the wake phrase over the pet's own voice and cut it off
+  const [speaker] = useState(
+    () =>
+      new ReplySpeaker(
+        () => settingsRef.current,
+        (on) => invoke("set_speaking", { on }).catch(console.error),
+      ),
+  );
   const holdingMic = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const hideTimer = useRef<number | undefined>(undefined);
@@ -43,16 +52,18 @@ export default function Pet() {
       listen<Settings>("settings:changed", (e) => (settingsRef.current = e.payload)),
       listen<VoiceState>("voice:state", (e) => {
         setVoice(e.payload.state);
-        if (e.payload.state === "listening") stopSpeaking();
+        if (e.payload.state === "listening") speaker.interrupt();
         if (e.payload.state === "error" && e.payload.error) {
           window.clearTimeout(hideTimer.current);
           setBubble({ kind: "reply", text: `🎤 ${e.payload.error}` });
           hideTimer.current = window.setTimeout(() => setBubble(null), 6000);
         }
       }),
+      // The wake phrase was heard while the pet was talking
+      listen("voice:interrupt", () => speaker.interrupt()),
     ];
     return () => unlisten.forEach((u) => u.then((f) => f()));
-  }, []);
+  }, [speaker]);
 
   // WebSocket with auto-reconnect
   useEffect(() => {
@@ -63,10 +74,12 @@ export default function Pet() {
       avatar.handle(msg);
       const type = msg.type || "reply";
       if (type === "user" || type === "thinking") {
+        speaker.reset();
         window.clearTimeout(hideTimer.current);
         setBubble({ kind: "thinking", text: "" });
       } else if (type === "tool") {
         window.clearTimeout(hideTimer.current);
+        speaker.restart();
         setBubble({ kind: "searching", text: `🔎 ${msg.label ?? "looking it up"}…` });
       } else if (type === "ask") {
         // "Ask me first" mode: yes/no before a lookup
@@ -77,13 +90,13 @@ export default function Pet() {
       } else if (type === "token") {
         window.clearTimeout(hideTimer.current);
         setBubble((b) => ({ kind: "talking", text: (b?.kind === "talking" ? b.text : "") + (msg.text ?? "") }));
+        speaker.token(msg.text ?? "");
       } else if (type === "reply") {
         const text = msg.text ?? "";
         setBubble({ kind: "reply", text });
         window.clearTimeout(hideTimer.current);
         hideTimer.current = window.setTimeout(() => setBubble(null), bubbleHoldMs(text));
-        const s = settingsRef.current;
-        if (s?.speakReplies) speakReply(text, s);
+        speaker.finish(text);
       }
     };
 
@@ -116,7 +129,7 @@ export default function Pet() {
       window.clearTimeout(reconnect);
       wsRef.current?.close();
     };
-  }, [avatar]);
+  }, [avatar, speaker]);
 
   // Tell Rust where the visible parts are, so clicks elsewhere in this
   // see-through window reach the app behind it (desktop::pass_through_loop)

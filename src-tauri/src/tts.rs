@@ -98,7 +98,7 @@ pub fn status(app: &AppHandle) -> Status {
 
 /// Downloads `url` to `dest`, emitting `voice:progress` under `progress_id`.
 /// With `sha256`, the file must match or it's thrown away.
-async fn download(app: &AppHandle, url: &str, dest: &Path, sha256: Option<&str>, progress_id: &str) -> Result<(), String> {
+pub(crate) async fn download(app: &AppHandle, url: &str, dest: &Path, sha256: Option<&str>, progress_id: &str) -> Result<(), String> {
     let part = dest.with_extension("part");
     let resp = reqwest::Client::new()
         .get(url)
@@ -144,24 +144,34 @@ pub async fn download_engine(app: &AppHandle) -> Result<(), String> {
     download(app, &url, &archive, Some(sha), "piper").await?;
 
     let engine = root.join("engine");
-    tokio::fs::remove_dir_all(&engine).await.ok();
-    tokio::fs::create_dir_all(&engine).await.map_err(|e| e.to_string())?;
-    // bsdtar ships with Windows 10+ and reads zips; Git Bash's tar would read "C:" as a host
-    let tar = if cfg!(windows) { r"C:\Windows\System32\tar.exe" } else { "tar" };
-    let status = tokio::process::Command::new(tar)
-        .arg("-xf")
-        .arg(&archive)
-        .arg("-C")
-        .arg(&engine)
-        .status()
-        .await
-        .map_err(|e| format!("Couldn't unpack Piper: {e}"))?;
+    let unpacked = unpack(&archive, &engine).await;
     tokio::fs::remove_file(&archive).await.ok();
-    if !status.success() || engine_exe(app).is_none() {
+    if unpacked.is_err() || engine_exe(app).is_none() {
         return Err("Couldn't unpack Piper".into());
     }
     log::info!("Piper {ENGINE_RELEASE} installed");
     Ok(())
+}
+
+/// Unpacks a zip / .tar.gz / .tar.bz2 into a fresh `dest` folder.
+pub(crate) async fn unpack(archive: &Path, dest: &Path) -> Result<(), String> {
+    tokio::fs::remove_dir_all(dest).await.ok();
+    tokio::fs::create_dir_all(dest).await.map_err(|e| e.to_string())?;
+    // bsdtar ships with Windows 10+ and reads zips and bzip2; Git Bash's tar would read "C:" as a host
+    let tar = if cfg!(windows) { r"C:\Windows\System32\tar.exe" } else { "tar" };
+    let status = tokio::process::Command::new(tar)
+        .arg("-xf")
+        .arg(archive)
+        .arg("-C")
+        .arg(dest)
+        .status()
+        .await
+        .map_err(|e| format!("Couldn't unpack: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Couldn't unpack".into())
+    }
 }
 
 pub async fn download_voice(app: &AppHandle, id: &str) -> Result<(), String> {
@@ -186,7 +196,7 @@ pub async fn delete_voice(app: &AppHandle, id: &str) -> Result<(), String> {
 
 /// Text as Piper should hear it: one line (each line is a separate utterance),
 /// without emoji or markdown symbols.
-fn speakable(text: &str) -> String {
+pub(crate) fn speakable(text: &str) -> String {
     let emoji = |c: char| {
         matches!(c as u32, 0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x2B00..=0x2BFF | 0xFE00..=0xFE0F | 0x200D | 0x20E3)
     };

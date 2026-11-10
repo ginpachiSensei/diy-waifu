@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { PiperStatus, Settings, VoiceProgress, VoiceState, VoiceStatus, errorText } from "../api";
-import { canSpeak, loadVoices, speak, speakPiper } from "../speech";
+import { KokoroStatus, PiperStatus, Settings, StudioStatus, VoiceProgress, VoiceState, VoiceStatus, errorText } from "../api";
+import { canSpeak, loadVoices, speak, speakOffline } from "../speech";
 
 interface Props {
   settings: Settings | null;
@@ -27,10 +27,15 @@ export default function VoiceTab({ settings, onSaved }: Props) {
   const [wakeWord, setWakeWord] = useState("");
 
   const [piper, setPiper] = useState<PiperStatus | null>(null);
+  const [kokoro, setKokoro] = useState<KokoroStatus | null>(null);
+  const [studio, setStudio] = useState<StudioStatus | null>(null);
+  const [style, setStyle] = useState("");
 
   const refresh = useCallback(() => {
     invoke<VoiceStatus>("voice_status").then(setStatus).catch(console.error);
     invoke<PiperStatus>("piper_status").then(setPiper).catch(console.error);
+    invoke<KokoroStatus>("kokoro_status").then(setKokoro).catch(console.error);
+    invoke<StudioStatus>("studio_status").then(setStudio).catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -49,6 +54,7 @@ export default function VoiceTab({ settings, onSaved }: Props) {
     if (settings) {
       setShortcut(settings.pttShortcut);
       setWakeWord(settings.wakeWord);
+      setStyle(settings.studioStyle);
     }
   }, [settings]);
 
@@ -119,12 +125,61 @@ export default function VoiceTab({ settings, onSaved }: Props) {
     refresh();
   }
 
+  async function getKokoro() {
+    setDownloading("kokoro");
+    setProgress(null);
+    setMessage(null);
+    try {
+      await invoke("download_kokoro");
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    }
+    setDownloading(null);
+    refresh();
+  }
+
+  async function removeKokoro() {
+    try {
+      await invoke("delete_kokoro");
+      if (settings?.ttsEngine === "kokoro") await save({ ttsEngine: "windows" });
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    }
+    refresh();
+  }
+
+  async function getStudio() {
+    setDownloading("studio");
+    setProgress(null);
+    setMessage(null);
+    try {
+      await invoke("download_studio");
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    }
+    setDownloading(null);
+    refresh();
+  }
+
+  async function removeStudio() {
+    try {
+      await invoke("delete_studio");
+      if (settings?.ttsEngine === "studio") await save({ ttsEngine: "windows" });
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    }
+    refresh();
+  }
+
   async function test() {
     if (!settings) return;
-    const line = `Hi! I'm ${settings.companionName}. Does this voice sound okay?`;
-    if (settings.ttsEngine === "piper") {
+    const line =
+      settings.language === "ja"
+        ? `こんにちは！${settings.companionName}だよ。この声、どうかな？気に入ってくれるといいな！`
+        : `Hi! I'm ${settings.companionName}. Does this voice sound okay? I hope you like it!`;
+    if (settings.ttsEngine !== "windows") {
       try {
-        await speakPiper(line);
+        await speakOffline(settings.ttsEngine, line);
       } catch (e) {
         setMessage({ ok: false, text: errorText(e) });
       }
@@ -229,12 +284,23 @@ export default function VoiceTab({ settings, onSaved }: Props) {
           Anything without it is thrown away, never saved or logged. It uses some CPU while people talk. Say just the
           phrase and it waits a few seconds for the rest.
         </p>
+        {settings.language === "ja" && (
+          <p className="hint">
+            For Japanese, write the wake phrase in Japanese, e.g. 「ねえ、マイ」; hiragana and katakana both match.
+          </p>
+        )}
       </section>
 
       <section>
         <h3>Speech model</h3>
         {!selected?.downloaded && (
           <p className="error">Download a model below to start talking. base.en is a good start.</p>
+        )}
+        {settings.language !== "auto" && settings.language !== "en" && settings.whisperModel.endsWith(".en") && (
+          <p className="error">
+            {settings.whisperModel} only understands English. For {settings.language === "ja" ? "Japanese" : "Hindi"}, use
+            small (or base).
+          </p>
         )}
         <ul className="list">
           {status?.models.map((m) => (
@@ -286,10 +352,16 @@ export default function VoiceTab({ settings, onSaved }: Props) {
               value={settings.ttsEngine}
               onChange={(e) => save({ ttsEngine: e.currentTarget.value as Settings["ttsEngine"] })}
             >
-              <option value="windows">Windows voices</option>
-              <option value="piper" disabled={!piper?.supported}>
-                Natural voices (Piper, offline)
+              <option value="studio" disabled={!studio?.supported}>
+                Studio (most lifelike, heavy, English + Japanese)
               </option>
+              <option value="kokoro" disabled={!kokoro?.supported}>
+                Kokoro (natural, light, English)
+              </option>
+              <option value="piper" disabled={!piper?.supported}>
+                Piper (offline, has Hindi)
+              </option>
+              <option value="windows">Windows voices</option>
             </select>
           </label>
           <label className="inline">
@@ -341,6 +413,112 @@ export default function VoiceTab({ settings, onSaved }: Props) {
                 These are the voices installed in Windows (Settings → Time &amp; language → Speech adds more).
               </p>
             </>
+          )
+        ) : settings.ttsEngine === "studio" ? (
+          <>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings.studioGpu}
+                onChange={async (e) => {
+                  await save({ studioGpu: e.currentTarget.checked });
+                  refresh();
+                }}
+              />
+              Use the graphics card (Vulkan: NVIDIA, AMD or Intel). Much faster; needs a few GB of video memory.
+            </label>
+            {studio?.engineReady && studio.modelReady ? (
+              <>
+                <div className="row">
+                  <label className="inline">
+                    Voice
+                    <select value={settings.studioVoice} onChange={(e) => save({ studioVoice: e.currentTarget.value })}>
+                      {studio.voices.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.id}: {v.note}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button onClick={removeStudio}>Delete studio voices</button>
+                </div>
+                <form
+                  className="row"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    save({ studioStyle: style.trim() }, "Speaking style saved.");
+                  }}
+                >
+                  <label className="inline grow">
+                    Speaking style
+                    <input
+                      value={style}
+                      onChange={(e) => setStyle(e.currentTarget.value)}
+                      placeholder="e.g. Speak softly and sleepily."
+                    />
+                  </label>
+                  <button type="submit" disabled={style.trim() === settings.studioStyle}>
+                    Save
+                  </button>
+                </form>
+                <p className="hint">
+                  Every voice speaks every language; the style is a plain description of how to talk. The first sentence
+                  after a while waits for the model to load. Speed doesn't apply to these voices.
+                  {!settings.studioGpu && " On the CPU these voices are slow; the graphics card option helps a lot."}
+                </p>
+              </>
+            ) : (
+              <div className="card">
+                <span>
+                  Qwen3-TTS, a large voice model (about {(((studio?.engineMb ?? 32) + (studio?.modelMb ?? 2817)) / 1000).toFixed(1)} GB to download, and about 4 GB of memory while talking). It
+                  sounds the most lifelike, in English, Japanese and 8 more languages, and runs on this PC; nothing is
+                  sent online. Until it's downloaded, replies use a Windows voice.
+                </span>
+                <div className="row">
+                  <button className="primary" onClick={getStudio} disabled={!!downloading}>
+                    {downloading === "studio"
+                      ? `${pct ?? 0}%`
+                      : studio?.modelReady
+                        ? "Download the engine"
+                        : "Download studio voices"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        ) : settings.ttsEngine === "kokoro" ? (
+          kokoro?.ready ? (
+            <>
+              <div className="row">
+                <label className="inline">
+                  Voice
+                  <select value={settings.kokoroVoice} onChange={(e) => save({ kokoroVoice: e.currentTarget.value })}>
+                    {kokoro.voices.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.id}: {v.note}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button onClick={removeKokoro}>Delete Kokoro</button>
+              </div>
+              <p className="hint">
+                English only (Japanese lines use a Japanese Windows voice). All voices are in the one download; switching
+                is instant.
+              </p>
+            </>
+          ) : (
+            <div className="card">
+              <span>
+                Kokoro (about {kokoro?.sizeMb ?? 160} MB) runs on this PC; nothing is sent online. Until it's downloaded,
+                replies use a Windows voice.
+              </span>
+              <div className="row">
+                <button className="primary" onClick={getKokoro} disabled={!!downloading}>
+                  {downloading === "kokoro" ? `${pct ?? 0}%` : "Download Kokoro"}
+                </button>
+              </div>
+            </div>
           )
         ) : (
           <>

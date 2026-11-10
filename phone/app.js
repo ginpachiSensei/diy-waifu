@@ -237,6 +237,12 @@ import { createAvatar, gifFor } from "./avatar.js";
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.pitch = 1.3;
+    // Japanese replies need a Japanese voice, or they're read as gibberish
+    if (/[぀-ヿ一-鿿]/.test(text)) {
+      u.lang = "ja-JP";
+      const ja = speechSynthesis.getVoices().find((v) => v.lang.startsWith("ja"));
+      if (ja) u.voice = ja;
+    }
     speechSynthesis.speak(u);
   }
 
