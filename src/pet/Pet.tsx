@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Settings, VoiceState } from "../api";
-import { speak, stopSpeaking } from "../speech";
+import { speakReply, stopSpeaking } from "../speech";
 import { createAvatar, gifFor, CompanionMessage, GifManifest } from "../../phone/avatar.js";
 
 const WS_URL = "ws://127.0.0.1:8080";
@@ -83,7 +83,7 @@ export default function Pet() {
         window.clearTimeout(hideTimer.current);
         hideTimer.current = window.setTimeout(() => setBubble(null), bubbleHoldMs(text));
         const s = settingsRef.current;
-        if (s?.speakReplies) speak(text, s);
+        if (s?.speakReplies) speakReply(text, s);
       }
     };
 

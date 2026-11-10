@@ -13,6 +13,7 @@ mod reminders;
 mod phone;
 mod settings;
 mod tools;
+mod tts;
 mod voice;
 mod websocket;
 
@@ -433,6 +434,38 @@ fn answer_ask(app: tauri::AppHandle, id: u64, yes: bool) -> bool {
     ask::answer(&app, id, yes)
 }
 
+#[tauri::command]
+fn piper_status(app: tauri::AppHandle) -> tts::Status {
+    tts::status(&app)
+}
+
+#[tauri::command]
+async fn download_piper_engine(app: tauri::AppHandle) -> Result<(), String> {
+    tts::download_engine(&app).await
+}
+
+#[tauri::command]
+async fn download_piper_voice(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    tts::download_voice(&app, &id).await
+}
+
+#[tauri::command]
+async fn delete_piper_voice(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    tts::delete_voice(&app, &id).await
+}
+
+/// Speaks `text` with the Piper voice from settings (or `voice`). Returns WAV bytes.
+#[tauri::command]
+async fn piper_speak(
+    app: tauri::AppHandle,
+    text: String,
+    voice: Option<String>,
+) -> Result<tauri::ipc::Response, String> {
+    let s = Settings::load(&app.state::<Db>());
+    let voice = voice.unwrap_or(s.piper_voice);
+    Ok(tauri::ipc::Response::new(tts::synthesize(&app, &text, &voice, s.tts_rate).await?))
+}
+
 /// Pet mic button pressed
 #[tauri::command]
 fn voice_start(app: tauri::AppHandle) -> Result<(), String> {
@@ -594,6 +627,11 @@ pub fn run() {
             download_voice_model,
             delete_voice_model,
             answer_ask,
+            piper_status,
+            download_piper_engine,
+            download_piper_voice,
+            delete_piper_voice,
+            piper_speak,
             voice_start,
             voice_stop
         ])

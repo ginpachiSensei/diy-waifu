@@ -70,12 +70,15 @@ pub struct Settings {
     pub whisper_model: String,
     /// Hold this to talk, e.g. "Ctrl+Shift+Space"
     pub ptt_shortcut: String,
-    /// Read replies aloud from the pet (Windows voices)
+    /// Read replies aloud from the pet (with tts_engine)
     pub speak_replies: bool,
     /// Windows voice name; empty = the default voice
     pub tts_voice: String,
     pub tts_rate: f32,
     pub tts_pitch: f32,
+    /// "windows" (speechSynthesis in the webview) or "piper" (see tts.rs)
+    pub tts_engine: String,
+    pub piper_voice: String,
 }
 
 impl Default for Settings {
@@ -113,6 +116,8 @@ impl Default for Settings {
             tts_voice: String::new(),
             tts_rate: 1.0,
             tts_pitch: 1.1,
+            tts_engine: "windows".into(),
+            piper_voice: "en_US-amy-medium".into(),
         }
     }
 }
@@ -148,6 +153,9 @@ impl Settings {
         self.ptt_shortcut = self.ptt_shortcut.trim().to_string();
         self.tts_rate = self.tts_rate.clamp(0.5, 2.0);
         self.tts_pitch = self.tts_pitch.clamp(0.5, 2.0);
+        if self.tts_engine != "piper" {
+            self.tts_engine = "windows".into();
+        }
         if !crate::voice::MODELS.iter().any(|m| m.0 == self.whisper_model) {
             self.whisper_model = Self::default().whisper_model;
         }
