@@ -48,6 +48,8 @@ export interface Settings {
   ttsRate: number;
   ttsPitch: number;
   ttsEngine: "windows" | "piper";
+  handsFree: boolean;
+  wakeWord: string;
   piperVoice: string;
 }
 
@@ -62,6 +64,8 @@ export interface VoiceStatus {
   models: VoiceModel[];
   microphone: string | null;
   recording: boolean;
+  handsFree: boolean;
+  wakePhrase: string;
 }
 
 export interface VoiceState {

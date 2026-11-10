@@ -47,14 +47,14 @@ fn language_for(id: &str) -> &'static str {
     }
 }
 
-struct Captured {
-    samples: Vec<f32>,
-    rate: u32,
-    channels: u16,
+pub(crate) struct Captured {
+    pub(crate) samples: Vec<f32>,
+    pub(crate) rate: u32,
+    pub(crate) channels: u16,
 }
 
 /// A running microphone stream, its sample buffer, sample rate and channels
-type OpenStream = (cpal::Stream, Arc<Mutex<Vec<f32>>>, u32, u16);
+pub(crate) type OpenStream = (cpal::Stream, Arc<Mutex<Vec<f32>>>, u32, u16);
 
 struct Recorder {
     stop: std::sync::mpsc::Sender<()>,
@@ -89,7 +89,7 @@ struct StateEvent<'a> {
     error: Option<String>,
 }
 
-fn set_state(app: &AppHandle, state: &str, error: Option<String>) {
+pub(crate) fn set_state(app: &AppHandle, state: &str, error: Option<String>) {
     if let Some(e) = &error {
         log::warn!("Voice: {e}");
     }
@@ -222,46 +222,7 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
     // cpal streams can't move between threads, so the stream lives on this one
     let thread = std::thread::spawn(move || -> Result<Captured, String> {
-        let setup = || -> Result<OpenStream, String> {
-            let device = cpal::default_host()
-                .default_input_device()
-                .ok_or("No microphone found")?;
-            let config = device.default_input_config().map_err(|e| e.to_string())?;
-            let rate = config.sample_rate().0;
-            let channels = config.channels();
-            let buf = Arc::new(Mutex::new(Vec::<f32>::new()));
-            let err_fn = |e| log::warn!("Microphone error: {e}");
-            let b = buf.clone();
-            let stream = match config.sample_format() {
-                cpal::SampleFormat::F32 => device.build_input_stream(
-                    &config.into(),
-                    move |data: &[f32], _: &_| b.lock().unwrap().extend_from_slice(data),
-                    err_fn,
-                    None,
-                ),
-                cpal::SampleFormat::I16 => device.build_input_stream(
-                    &config.into(),
-                    move |data: &[i16], _: &_| {
-                        b.lock().unwrap().extend(data.iter().map(|s| *s as f32 / i16::MAX as f32))
-                    },
-                    err_fn,
-                    None,
-                ),
-                cpal::SampleFormat::U16 => device.build_input_stream(
-                    &config.into(),
-                    move |data: &[u16], _: &_| {
-                        b.lock().unwrap().extend(data.iter().map(|s| (*s as f32 - 32768.0) / 32768.0))
-                    },
-                    err_fn,
-                    None,
-                ),
-                other => return Err(format!("Unsupported microphone format {other:?}")),
-            }
-            .map_err(|e| format!("Couldn't open the microphone: {e}"))?;
-            stream.play().map_err(|e| format!("Couldn't start the microphone: {e}"))?;
-            Ok((stream, buf, rate, channels))
-        };
-        let (stream, buf, rate, channels) = match setup() {
+        let (stream, buf, rate, channels) = match open_mic() {
             Ok(v) => {
                 ready_tx.send(Ok(())).ok();
                 v
@@ -293,8 +254,50 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Opens the default microphone. Samples collect in the returned buffer. The
+/// stream must stay on the thread that opened it (cpal streams aren't Send).
+pub(crate) fn open_mic() -> Result<OpenStream, String> {
+    let device = cpal::default_host()
+        .default_input_device()
+        .ok_or("No microphone found")?;
+    let config = device.default_input_config().map_err(|e| e.to_string())?;
+    let rate = config.sample_rate().0;
+    let channels = config.channels();
+    let buf = Arc::new(Mutex::new(Vec::<f32>::new()));
+    let err_fn = |e| log::warn!("Microphone error: {e}");
+    let b = buf.clone();
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => device.build_input_stream(
+            &config.into(),
+            move |data: &[f32], _: &_| b.lock().unwrap().extend_from_slice(data),
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::I16 => device.build_input_stream(
+            &config.into(),
+            move |data: &[i16], _: &_| {
+                b.lock().unwrap().extend(data.iter().map(|s| *s as f32 / i16::MAX as f32))
+            },
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::U16 => device.build_input_stream(
+            &config.into(),
+            move |data: &[u16], _: &_| {
+                b.lock().unwrap().extend(data.iter().map(|s| (*s as f32 - 32768.0) / 32768.0))
+            },
+            err_fn,
+            None,
+        ),
+        other => return Err(format!("Unsupported microphone format {other:?}")),
+    }
+    .map_err(|e| format!("Couldn't open the microphone: {e}"))?;
+    stream.play().map_err(|e| format!("Couldn't start the microphone: {e}"))?;
+    Ok((stream, buf, rate, channels))
+}
+
 /// Mono, then linear resampling to 16 kHz (fine for speech)
-fn to_16k_mono(c: &Captured) -> Vec<f32> {
+pub(crate) fn to_16k_mono(c: &Captured) -> Vec<f32> {
     let ch = c.channels.max(1) as usize;
     let mono: Vec<f32> = c
         .samples
@@ -499,7 +502,7 @@ pub async fn idle_reaper(app: AppHandle) {
     }
 }
 
-async fn transcribe(app: &AppHandle, audio: &[f32]) -> Result<String, String> {
+pub(crate) async fn transcribe(app: &AppHandle, audio: &[f32]) -> Result<String, String> {
     let settings = Settings::load(&app.state::<Db>());
     let model = model_path(app, &settings.whisper_model).ok_or("The speech model is missing")?;
     ensure_server(app, model).await?;
