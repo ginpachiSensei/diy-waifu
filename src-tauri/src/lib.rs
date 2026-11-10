@@ -5,6 +5,8 @@ mod db;
 mod desktop;
 mod esp32;
 mod handsfree;
+mod kokoro;
+mod studio;
 mod ollama;
 mod memory;
 mod pairing;
@@ -473,6 +475,64 @@ async fn piper_speak(
     Ok(tauri::ipc::Response::new(tts::synthesize(&app, &text, &voice, s.tts_rate).await?))
 }
 
+#[tauri::command]
+fn kokoro_status(app: tauri::AppHandle) -> kokoro::Status {
+    kokoro::status(&app)
+}
+
+#[tauri::command]
+async fn download_kokoro(app: tauri::AppHandle) -> Result<(), String> {
+    kokoro::download(&app).await
+}
+
+#[tauri::command]
+async fn delete_kokoro(app: tauri::AppHandle) -> Result<(), String> {
+    kokoro::delete(&app).await
+}
+
+/// Speaks `text` with the Kokoro voice from settings (or `voice`). Returns WAV bytes.
+#[tauri::command]
+async fn kokoro_speak(
+    app: tauri::AppHandle,
+    text: String,
+    voice: Option<String>,
+) -> Result<tauri::ipc::Response, String> {
+    let s = Settings::load(&app.state::<Db>());
+    let voice = voice.unwrap_or(s.kokoro_voice);
+    Ok(tauri::ipc::Response::new(kokoro::synthesize(&app, &text, &voice, s.tts_rate).await?))
+}
+
+#[tauri::command]
+fn studio_status(app: tauri::AppHandle) -> studio::Status {
+    studio::status(&app)
+}
+
+#[tauri::command]
+async fn download_studio(app: tauri::AppHandle) -> Result<(), String> {
+    studio::download(&app).await
+}
+
+#[tauri::command]
+async fn delete_studio(app: tauri::AppHandle) -> Result<(), String> {
+    studio::delete(&app).await
+}
+
+/// Speaks `text` with the studio voice from settings (or `voice`). Returns WAV bytes.
+#[tauri::command]
+async fn studio_speak(
+    app: tauri::AppHandle,
+    text: String,
+    voice: Option<String>,
+) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(studio::synthesize(&app, &text, voice.as_deref()).await?))
+}
+
+/// The pet started or stopped saying a reply out loud
+#[tauri::command]
+fn set_speaking(app: tauri::AppHandle, on: bool) {
+    handsfree::set_speaking(&app, on);
+}
+
 /// Pet mic button pressed
 #[tauri::command]
 fn voice_start(app: tauri::AppHandle) -> Result<(), String> {
@@ -581,6 +641,8 @@ pub fn run() {
         .manage(voice::VoiceState::default())
         .manage(ask::Asks::default())
         .manage(handsfree::HandsFree::default())
+        .manage(handsfree::Speaking::default())
+        .manage(studio::StudioState::default())
         .on_window_event(|window, event| match event {
             // Closing a window only hides it; Quit is in the tray
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -640,6 +702,15 @@ pub fn run() {
             download_piper_voice,
             delete_piper_voice,
             piper_speak,
+            set_speaking,
+            kokoro_status,
+            download_kokoro,
+            delete_kokoro,
+            kokoro_speak,
+            studio_status,
+            download_studio,
+            delete_studio,
+            studio_speak,
             voice_start,
             voice_stop
         ])
@@ -698,6 +769,7 @@ pub fn run() {
             tauri::async_runtime::spawn(proactive::run(app_handle.clone()));
             tauri::async_runtime::spawn(desktop::pass_through_loop(app_handle.clone()));
             tauri::async_runtime::spawn(voice::idle_reaper(app_handle.clone()));
+            tauri::async_runtime::spawn(studio::idle_reaper(app_handle.clone()));
             tauri::async_runtime::spawn(handsfree::run(app_handle.clone()));
             voice::register_shortcut(&app_handle);
 
@@ -711,6 +783,7 @@ pub fn run() {
                 let state = app_handle.state::<AppState>();
                 state.shutting_down.store(true, Ordering::Relaxed);
                 voice::kill_server_now(app_handle);
+                studio::kill_server_now(app_handle);
                 if let Some(child) = state.ollama_child.lock().unwrap().take() {
                     let _ = child.kill();
                     log::info!("Ollama sidecar killed on exit");

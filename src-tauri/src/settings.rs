@@ -80,9 +80,18 @@ pub struct Settings {
     pub tts_voice: String,
     pub tts_rate: f32,
     pub tts_pitch: f32,
-    /// "windows" (speechSynthesis in the webview) or "piper" (see tts.rs)
+    /// "windows" (speechSynthesis in the webview), "piper" (see tts.rs),
+    /// "kokoro" (kokoro.rs) or "studio" (studio.rs)
     pub tts_engine: String,
     pub piper_voice: String,
+    pub kokoro_voice: String,
+    /// Studio voices: Qwen3-TTS speaker, speaking-style instruction, and GPU build
+    pub studio_voice: String,
+    pub studio_style: String,
+    pub studio_gpu: bool,
+    /// Reply language: "auto" (whatever the user writes in), "en", "ja" or "hi".
+    /// Also tells speech-to-text what to expect.
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -124,6 +133,11 @@ impl Default for Settings {
             hands_free: false,
             wake_word: String::new(),
             piper_voice: "en_US-amy-medium".into(),
+            kokoro_voice: "af_heart".into(),
+            studio_voice: "ono_anna".into(),
+            studio_style: crate::studio::DEFAULT_STYLE.into(),
+            studio_gpu: false,
+            language: "auto".into(),
         }
     }
 }
@@ -160,8 +174,18 @@ impl Settings {
         self.tts_rate = self.tts_rate.clamp(0.5, 2.0);
         self.tts_pitch = self.tts_pitch.clamp(0.5, 2.0);
         self.wake_word = self.wake_word.trim().chars().take(40).collect();
-        if self.tts_engine != "piper" {
+        if !matches!(self.language.as_str(), "auto" | "en" | "ja" | "hi") {
+            self.language = "auto".into();
+        }
+        if !crate::studio::is_voice(&self.studio_voice) {
+            self.studio_voice = Self::default().studio_voice;
+        }
+        self.studio_style = self.studio_style.trim().chars().take(300).collect();
+        if !matches!(self.tts_engine.as_str(), "piper" | "kokoro" | "studio") {
             self.tts_engine = "windows".into();
+        }
+        if !crate::kokoro::is_voice(&self.kokoro_voice) {
+            self.kokoro_voice = Self::default().kokoro_voice;
         }
         if !crate::voice::MODELS.iter().any(|m| m.0 == self.whisper_model) {
             self.whisper_model = Self::default().whisper_model;

@@ -8,6 +8,11 @@
 //! phrase is used; everything else is dropped without being logged or stored.
 //! Saying just the wake phrase makes it listen for the next sentence (8s).
 //!
+//! While the pet is talking, its own voice reaches the microphone too, so the
+//! wake phrase is looked for anywhere in what was heard, not just at the start.
+//! Saying it then cuts the pet off (`voice:interrupt`), like barge-in in
+//! Open-LLM-VTuber.
+//!
 //! It stops while paused, and whenever voice input or the setting is off.
 //! Audio never leaves the PC.
 
@@ -33,6 +38,8 @@ const MIN_UTTERANCE: usize = RATE / 2;
 const MAX_UTTERANCE: usize = RATE * 15;
 /// After only the wake phrase, how long to wait for the request
 const FOLLOW_UP: Duration = Duration::from_secs(8);
+/// Speech that ended this soon after the pet stopped talking may still hold its voice
+const SPEAKING_TAIL: Duration = Duration::from_secs(3);
 
 /// Finds utterances in a 16 kHz mono stream, frame by frame.
 pub struct Vad {
@@ -121,10 +128,14 @@ fn close(heard: &str, want: &str) -> bool {
     heard == want || (want.chars().count() >= 3 && distance(heard, want) <= 1)
 }
 
+const GREETINGS: &[&str] = &["hey", "hi", "hay", "a", "ok", "okay", "hello", "yo"];
+
 /// If `text` starts with the wake phrase, what came after it (maybe empty).
 /// The leading "hey"/"hi"/"ok" is optional, since whisper often drops or changes it.
 pub fn after_wake(text: &str, wake: &str) -> Option<String> {
-    const GREETINGS: &[&str] = &["hey", "hi", "hay", "a", "ok", "okay", "hello", "yo"];
+    if wake.chars().any(is_cjk) {
+        return after_wake_cjk(text, wake, false);
+    }
     let heard = words(text);
     let mut want = words(wake);
     if want.len() > 1 && GREETINGS.contains(&want[0].as_str()) {
@@ -156,6 +167,91 @@ pub fn after_wake(text: &str, wake: &str) -> Option<String> {
         in_word = is_word;
     }
     Some(text[cut..].trim_start_matches(|c: char| !c.is_alphanumeric()).trim().to_string())
+}
+
+/// Like `after_wake`, but the wake phrase may come anywhere (after the pet's own
+/// words, when the microphone heard both). Away from the start it needs its
+/// greeting ("hey Mai", not just "Mai"), since the pet may say its own name.
+pub fn find_wake(text: &str, wake: &str) -> Option<String> {
+    if wake.chars().any(is_cjk) {
+        return after_wake_cjk(text, wake, true);
+    }
+    let has_greeting = words(wake).first().is_some_and(|w| GREETINGS.contains(&w.as_str()));
+    let mut in_word = false;
+    let mut first = true;
+    for (i, c) in text.char_indices() {
+        let is_word = c.is_alphanumeric() || c == '\'';
+        if is_word && !in_word {
+            let greeted = || words(&text[i..]).first().is_some_and(|w| w != "a" && GREETINGS.contains(&w.as_str()));
+            if first || !has_greeting || greeted() {
+                if let Some(rest) = after_wake(&text[i..], wake) {
+                    return Some(rest);
+                }
+            }
+            first = false;
+        }
+        in_word = is_word;
+    }
+    None
+}
+
+// Japanese (and Chinese) has no spaces between words, so a wake phrase like
+// "ねえマイ" is matched letter by letter instead of word by word.
+
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32, 0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xFF66..=0xFF9F)
+}
+
+/// Hiragana and katakana compare equal, since whisper writes a name either way
+fn fold(c: char) -> char {
+    match c as u32 {
+        0x3041..=0x3096 => char::from_u32(c as u32 + 0x60).unwrap_or(c),
+        _ => c.to_lowercase().next().unwrap_or(c),
+    }
+}
+
+/// The letters of `text` (no spaces or punctuation), folded, with their byte offsets
+fn letters(text: &str) -> Vec<(usize, char)> {
+    text.char_indices().filter(|(_, c)| c.is_alphanumeric()).map(|(i, c)| (i, fold(c))).collect()
+}
+
+/// Spoken "hey"s; just "ね" is left out because it ends so many sentences
+const JA_GREETINGS: &[&str] = &["ねえ", "ねぇ", "ねー", "おい", "やあ", "へい", "hey", "hi"];
+
+/// How many letters of `s` a greeting at its start takes (0 if none)
+fn greeting_len(s: &[char]) -> usize {
+    JA_GREETINGS
+        .iter()
+        .map(|g| letters(g).into_iter().map(|(_, c)| c).collect::<Vec<_>>())
+        .filter(|g| s.starts_with(g))
+        .map(|g| g.len())
+        .max()
+        .unwrap_or(0)
+}
+
+fn after_wake_cjk(text: &str, wake: &str, anywhere: bool) -> Option<String> {
+    let want: Vec<char> = letters(wake).into_iter().map(|(_, c)| c).collect();
+    let greet = greeting_len(&want);
+    let name = &want[greet..];
+    if name.is_empty() {
+        return None;
+    }
+    let heard = letters(text);
+    let chars: Vec<char> = heard.iter().map(|(_, c)| *c).collect();
+    let starts = if anywhere { chars.len() } else { 1.min(chars.len()) };
+    for start in 0..starts {
+        let g = greeting_len(&chars[start..]);
+        // Away from the start the greeting is needed, since the pet may say its own name
+        if start > 0 && greet > 0 && g == 0 {
+            continue;
+        }
+        if chars[start + g..].starts_with(name) {
+            let end = start + g + name.len();
+            let cut = heard.get(end).map_or(text.len(), |(i, _)| *i);
+            return Some(text[cut..].trim().to_string());
+        }
+    }
+    None
 }
 
 pub fn wake_phrase(s: &Settings) -> String {
@@ -225,6 +321,26 @@ pub fn is_on(app: &AppHandle) -> bool {
 #[derive(Default)]
 pub struct HandsFree(AtomicBool);
 
+/// Whether the pet is saying a reply out loud, and when it last stopped
+#[derive(Default)]
+pub struct Speaking(std::sync::Mutex<(bool, Option<Instant>)>);
+
+/// Called by the pet when it starts and stops talking (`set_speaking`).
+pub fn set_speaking(app: &AppHandle, on: bool) {
+    let state = app.state::<Speaking>();
+    let mut s = state.0.lock().unwrap();
+    if s.0 && !on {
+        s.1 = Some(Instant::now());
+    }
+    s.0 = on;
+}
+
+fn recently_speaking(app: &AppHandle) -> bool {
+    let state = app.state::<Speaking>();
+    let s = state.0.lock().unwrap();
+    s.0 || s.1.is_some_and(|t| t.elapsed() < SPEAKING_TAIL)
+}
+
 /// Starts and stops listening as settings and pause change, and handles what it hears.
 pub async fn run(app: AppHandle) {
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<f32>>();
@@ -262,6 +378,7 @@ pub async fn run(app: AppHandle) {
                 if running.is_none() || voice::is_recording(&app) {
                     continue;
                 }
+                let talking = recently_speaking(&app);
                 let text = match voice::transcribe(&app, &audio).await {
                     Ok(t) if !voice::is_noise(&t) => t,
                     Ok(_) => continue,
@@ -271,7 +388,12 @@ pub async fn run(app: AppHandle) {
                     }
                 };
                 let wake = wake_phrase(&Settings::load(&app.state::<Db>()));
-                let request = match after_wake(&text, &wake) {
+                let heard = if talking { find_wake(&text, &wake) } else { after_wake(&text, &wake) };
+                if heard.is_some() && talking {
+                    log::info!("Wake phrase heard over the pet's voice; cutting it off");
+                    app.emit("voice:interrupt", ()).ok();
+                }
+                let request = match heard {
                     Some(rest) if !rest.is_empty() => rest,
                     Some(_) => {
                         // Just the name: listen for the request next
@@ -279,7 +401,8 @@ pub async fn run(app: AppHandle) {
                         voice::set_state(&app, "listening", None);
                         continue;
                     }
-                    None if awaiting_request.is_some_and(|t| t.elapsed() < FOLLOW_UP) => text,
+                    // A follow-up mixed with the pet's voice can't be told apart from it
+                    None if !talking && awaiting_request.is_some_and(|t| t.elapsed() < FOLLOW_UP) => text,
                     None => continue, // not for us; dropped unlogged
                 };
                 awaiting_request = None;
@@ -306,6 +429,32 @@ mod tests {
         assert_eq!(after_wake("Hey Maya what's up", "hey Mayu").as_deref(), Some("what's up"));
         assert_eq!(after_wake("Okay computer, play music", "ok computer").as_deref(), Some("play music"));
         assert_eq!(after_wake("hey computer", "ok computer").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn finds_the_wake_phrase_after_other_words() {
+        let w = "hey Mai";
+        assert_eq!(
+            find_wake("and that's why the sky is blue. Hey Mai, stop.", w).as_deref(),
+            Some("stop.")
+        );
+        assert_eq!(find_wake("Mai, what time is it", w).as_deref(), Some("what time is it"));
+        assert_eq!(find_wake("the weather today is sunny and warm", w), None);
+        // The pet saying its own name doesn't count
+        assert_eq!(find_wake("I'm Mai and I love tea", w), None);
+        assert_eq!(find_wake("I'm Mai. Okay Mai, never mind", w).as_deref(), Some("never mind"));
+    }
+
+    #[test]
+    fn finds_a_japanese_wake_phrase() {
+        let w = "ねえマイ";
+        assert_eq!(after_wake("ねえ、マイ、今日の天気は？", w).as_deref(), Some("今日の天気は？"));
+        assert_eq!(after_wake("まい、おはよう", w).as_deref(), Some("おはよう"));
+        assert_eq!(after_wake("ねえマイ", w).as_deref(), Some(""));
+        assert_eq!(after_wake("今日はいい天気だね", w), None);
+        assert_eq!(find_wake("そうなんだ。ねえマイ、止まって", w).as_deref(), Some("止まって"));
+        // The pet saying its own name doesn't count
+        assert_eq!(find_wake("私はマイです", w), None);
     }
 
     fn tone(len: usize, amp: f32) -> Vec<f32> {
