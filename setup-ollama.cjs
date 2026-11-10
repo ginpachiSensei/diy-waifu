@@ -12,7 +12,7 @@
 // <exe dir>/lib/ollama and <working dir>/build/lib/ollama:
 //   - Windows: Tauri puts resources next to the exe, so lib/ollama/ just works.
 //   - macOS/Linux: bundles keep resources away from the exe (Contents/Resources,
-//     /usr/lib/<app>), so this script writes tauri.<os>.conf.json mapping the runner to
+//     /usr/lib/<app>), so src-tauri/tauri.{macos,linux}.conf.json map the runner to
 //     ollama-runtime/build/lib/ollama/, and ollama.rs starts the sidecar in ollama-runtime/.
 //
 // The release is pinned and checked against its sha256sum.txt. CUDA and ROCm folders are
@@ -136,20 +136,9 @@ function findFile(dir, name) {
     return null;
 }
 
-// macOS/Linux: point the runner resource where ollama.rs will look for it (see top)
-function writePlatformConfig() {
-    if (platform === 'win32') return;
-    const name = platform === 'darwin' ? 'tauri.macos.conf.json' : 'tauri.linux.conf.json';
-    const config = {
-        bundle: { resources: { 'binaries/lib/ollama/': 'ollama-runtime/build/lib/ollama/' } },
-    };
-    fs.writeFileSync(path.join(__dirname, 'src-tauri', name), JSON.stringify(config, null, 2) + '\n');
-}
-
 (async () => {
     try {
         fs.mkdirSync(runnerDir, { recursive: true }); // `resources` needs it to exist
-        writePlatformConfig();
 
         const current =
             fs.existsSync(finalPath) && fs.existsSync(versionFile) && fs.readFileSync(versionFile, 'utf8').trim() === VERSION;
