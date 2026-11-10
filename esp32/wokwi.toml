@@ -1,6 +1,6 @@
-# Wokwi for VS Code: build first with `pio run` (in this folder), then run
+# Wokwi for VS Code: build first with `pio run -e wokwi` (in this folder), then run
 # "Wokwi: Start Simulator". The circuit is in diagram.json.
 [wokwi]
 version = 1
-firmware = '.pio/build/esp32dev/merged-firmware.bin'
-elf = '.pio/build/esp32dev/firmware.elf'
+firmware = '.pio/build/wokwi/merged-firmware.bin'
+elf = '.pio/build/wokwi/firmware.elf'
